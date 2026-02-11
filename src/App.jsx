@@ -31,6 +31,26 @@ export default function App() {
   const [menuOpenKey, setMenuOpenKey] = useState(null);
   const menuRootRef = useRef(null);
 
+  // ✅ Futuristic background on body
+  useEffect(() => {
+    const prevBg = document.body.style.background;
+    const prevColor = document.body.style.color;
+    document.body.style.background =
+      "radial-gradient(1200px 700px at 10% 10%, rgba(88,101,242,0.22), transparent 60%)," +
+      "radial-gradient(900px 600px at 90% 15%, rgba(0,255,209,0.18), transparent 55%)," +
+      "radial-gradient(1000px 700px at 20% 90%, rgba(255,72,196,0.18), transparent 55%)," +
+      "linear-gradient(180deg, #070A16 0%, #070A16 45%, #060816 100%)";
+    document.body.style.color = "#EAF2FF";
+    document.body.style.margin = "0";
+    document.body.style.fontFamily =
+      "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji";
+    return () => {
+      document.body.style.background = prevBg;
+      document.body.style.color = prevColor;
+    };
+  }, []);
+
+  // 点击空白关闭菜单
   useEffect(() => {
     function onDocClick(e) {
       if (!menuRootRef.current) return;
@@ -43,11 +63,9 @@ export default function App() {
   // ---------- Auth ----------
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => setSession(session)
     );
-
     return () => listener.subscription.unsubscribe();
   }, []);
 
@@ -62,8 +80,14 @@ export default function App() {
 
     const [{ data: items, error: itemsErr }, { data: cks, error: cksErr }] =
       await Promise.all([
-        supabase.from("okr_items").select("*").order("created_at", { ascending: true }),
-        supabase.from("okr_checkins").select("*").order("created_at", { ascending: true }),
+        supabase
+          .from("okr_items")
+          .select("*")
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("okr_checkins")
+          .select("*")
+          .order("created_at", { ascending: true }),
       ]);
 
     setLoading(false);
@@ -103,12 +127,21 @@ export default function App() {
     });
 
     const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}`;
     setCheckinDrafts((prev) => {
       const next = { ...prev };
       for (const kr of krs) {
         if (!next[kr.id])
-          next[kr.id] = { month: ym, value: "", note: "", saving: false, error: "" };
+          next[kr.id] = {
+            month: ym,
+            value: "",
+            note: "",
+            saving: false,
+            error: "",
+          };
       }
       return next;
     });
@@ -232,23 +265,19 @@ export default function App() {
   }
 
   async function addKR(objectiveId) {
-    const draft = krDrafts[objectiveId] || { title: "", main_owner: "", target: "", current: "" };
+    const draft =
+      krDrafts[objectiveId] || { title: "", main_owner: "", target: "", current: "" };
     const title = (draft.title || "").trim();
     const main_owner = (draft.main_owner || "").trim();
     const target = safeNumber(draft.target);
     const current = safeNumber(draft.current);
 
-    if (!title) {
-      setKRDraft(objectiveId, { error: "请填写 KR 描述" });
-      return;
-    }
+    if (!title) return setKRDraft(objectiveId, { error: "请填写 KR 描述" });
     if (!Number.isFinite(target) || target <= 0) {
-      setKRDraft(objectiveId, { error: "目标值必须是 > 0 的数字（例如：26000000）" });
-      return;
+      return setKRDraft(objectiveId, { error: "目标值必须是 > 0 的数字（例如：26000000）" });
     }
     if (!Number.isFinite(current) || current < 0) {
-      setKRDraft(objectiveId, { error: "当前值必须是 ≥ 0 的数字（空则默认 0）" });
-      return;
+      return setKRDraft(objectiveId, { error: "当前值必须是 ≥ 0 的数字（空则默认 0）" });
     }
 
     const parentO = objectives.find((x) => x.id === objectiveId);
@@ -271,7 +300,10 @@ export default function App() {
 
     const { error } = await supabase.from("okr_items").insert(payload);
     if (error) {
-      setKRDraft(objectiveId, { saving: false, error: "新增 KR 失败：" + (error.message || "unknown") });
+      setKRDraft(objectiveId, {
+        saving: false,
+        error: "新增 KR 失败：" + (error.message || "unknown"),
+      });
       return;
     }
 
@@ -331,7 +363,9 @@ export default function App() {
     const valueNum = safeNumber(d.value);
 
     if (!monthFirstDay) return setCheckinDraft(kr.id, { error: "请选择月份（例如：2026-01）" });
-    if (!Number.isFinite(valueNum) || valueNum < 0) return setCheckinDraft(kr.id, { error: "复盘值必须是 ≥ 0 的数字" });
+    if (!Number.isFinite(valueNum) || valueNum < 0) {
+      return setCheckinDraft(kr.id, { error: "复盘值必须是 ≥ 0 的数字" });
+    }
 
     setCheckinDraft(kr.id, { saving: true, error: "" });
 
@@ -349,7 +383,10 @@ export default function App() {
       .upsert(payload, { onConflict: "kr_id,month" });
 
     if (insErr) {
-      setCheckinDraft(kr.id, { saving: false, error: "记录失败：" + (insErr.message || "unknown") });
+      setCheckinDraft(kr.id, {
+        saving: false,
+        error: "记录失败：" + (insErr.message || "unknown"),
+      });
       return;
     }
 
@@ -381,7 +418,35 @@ export default function App() {
     await loadAll();
   }
 
-  // ---------- UI Small Components ----------
+  // ---------- UI Components ----------
+  function Chip({ children, tone = "cyan" }) {
+    const t = tone === "pink" ? styles.chipPink : tone === "violet" ? styles.chipViolet : styles.chipCyan;
+    return <span style={{ ...styles.chip, ...t }}>{children}</span>;
+  }
+
+  function GlowButton({ children, onClick, disabled, variant = "primary", title }) {
+    const s =
+      variant === "ghost"
+        ? styles.btnGhost
+        : variant === "soft"
+        ? styles.btnSoft
+        : styles.btnPrimary;
+    return (
+      <button
+        title={title}
+        style={{
+          ...styles.btnBase,
+          ...s,
+          opacity: disabled ? 0.55 : 1,
+          cursor: disabled ? "not-allowed" : "pointer",
+        }}
+        onClick={disabled ? undefined : onClick}
+      >
+        {children}
+      </button>
+    );
+  }
+
   function MoreMenu({ menuKey, items }) {
     const isOpen = menuOpenKey === menuKey;
     return (
@@ -425,10 +490,10 @@ export default function App() {
       <div style={styles.modalMask} onMouseDown={onClose}>
         <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
           <div style={styles.modalHeader}>
-            <div style={{ fontWeight: 800 }}>{title}</div>
-            <button style={styles.modalClose} onClick={onClose} title="关闭">
+            <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>{title}</div>
+            <GlowButton variant="ghost" onClick={onClose} title="关闭">
               ✕
-            </button>
+            </GlowButton>
           </div>
           <div style={styles.modalBody}>{children}</div>
         </div>
@@ -472,83 +537,96 @@ export default function App() {
               </div>
             </div>
 
-            {draft.error ? <div style={styles.error}>{draft.error}</div> : null}
+            {draft.error ? <div style={styles.toastErr}>{draft.error}</div> : null}
 
-            <button style={styles.button} onClick={() => addCheckin(kr)} disabled={draft.saving}>
+            <GlowButton onClick={() => addCheckin(kr)} disabled={draft.saving}>
               {draft.saving ? "记录中..." : "记录本月复盘"}
-            </button>
+            </GlowButton>
           </>
         ) : (
-          <div style={{ color: "#6b7280", fontSize: 12 }}>
+          <div style={styles.muted}>
             只读模式：如需录入/编辑复盘，请先在该 O 右上角点击「修改」进入编辑模式。
           </div>
         )}
 
-        <div style={{ marginTop: 14, color: "#6b7280", fontSize: 12 }}>历史复盘：</div>
+        <div style={{ marginTop: 16 }}>
+          <div style={styles.sectionTitle}>历史复盘</div>
 
-        {history.length ? (
-          <div style={{ marginTop: 8 }}>
-            {history.map((h) => (
-              <div key={h.id} style={styles.checkinRow}>
-                <b style={{ width: 80, display: "inline-block" }}>{String(h.month).slice(0, 7)}</b>
+          {history.length ? (
+            <div style={{ marginTop: 10 }}>
+              {history.map((h) => (
+                <div key={h.id} style={styles.checkinRow}>
+                  <div style={{ width: 88 }}>
+                    <Chip tone="violet">{String(h.month).slice(0, 7)}</Chip>
+                  </div>
 
-                {!isEditing ? (
-                  <>
-                    <span style={{ marginLeft: 8 }}>值：{h.value}</span>
-                    {h.note ? <span style={{ marginLeft: 10, color: "#6b7280" }}>备注：{h.note}</span> : null}
-                  </>
-                ) : (
-                  <>
-                    <span style={{ marginLeft: 8 }}>值：</span>
-                    <input
-                      style={styles.inlineInput}
-                      type="number"
-                      defaultValue={h.value}
-                      onBlur={async (e) => {
-                        const n = safeNumber(e.target.value);
-                        if (!Number.isFinite(n) || n < 0) return alert("复盘值必须 ≥ 0");
-                        const ok = await updateCheckin(h.id, { value: n });
-                        if (ok) await loadAll();
-                      }}
-                    />
+                  {!isEditing ? (
+                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                      <div>
+                        <span style={styles.muted}>值：</span>
+                        <b>{h.value}</b>
+                      </div>
+                      {h.note ? (
+                        <div style={{ maxWidth: 640 }}>
+                          <span style={styles.muted}>备注：</span>
+                          <span style={{ color: "#DCE7FF" }}>{h.note}</span>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <span style={styles.muted}>值：</span>
+                      <input
+                        style={styles.inlineInput}
+                        type="number"
+                        defaultValue={h.value}
+                        onBlur={async (e) => {
+                          const n = safeNumber(e.target.value);
+                          if (!Number.isFinite(n) || n < 0) return alert("复盘值必须 ≥ 0");
+                          const ok = await updateCheckin(h.id, { value: n });
+                          if (ok) await loadAll();
+                        }}
+                      />
 
-                    <span style={{ marginLeft: 8 }}>备注：</span>
-                    <input
-                      style={{ ...styles.inlineInput, width: 320 }}
-                      defaultValue={h.note || ""}
-                      onBlur={async (e) => {
-                        const ok = await updateCheckin(h.id, { note: e.target.value });
-                        if (ok) await loadAll();
-                      }}
-                    />
+                      <span style={styles.muted}>备注：</span>
+                      <input
+                        style={{ ...styles.inlineInput, width: 360 }}
+                        defaultValue={h.note || ""}
+                        onBlur={async (e) => {
+                          const ok = await updateCheckin(h.id, { note: e.target.value });
+                          if (ok) await loadAll();
+                        }}
+                      />
 
-                    <MoreMenu
-                      menuKey={`ck:${h.id}`}
-                      items={[{ label: "删除复盘", danger: true, onClick: () => deleteCheckin(h.id) }]}
-                    />
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>暂无复盘记录</div>
-        )}
+                      <MoreMenu
+                        menuKey={`ck:${h.id}`}
+                        items={[{ label: "删除复盘", danger: true, onClick: () => deleteCheckin(h.id) }]}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, ...styles.muted }}>暂无复盘记录</div>
+          )}
+        </div>
       </div>
     );
   }
 
   // ---------- Tree View (with Zoom) ----------
   function TreeView({ objectives }) {
-    const wrapRef = useRef(null);          // 外层滚动容器
-    const contentRef = useRef(null);       // 被缩放的内容
+    const wrapRef = useRef(null);
+    const contentRef = useRef(null);
     const [lines, setLines] = useState([]);
     const nodeRefs = useRef(new Map());
-
-    // ✅ 缩放比例（0.5x ~ 2.0x）
     const [scale, setScale] = useState(1);
 
-    const root = useMemo(() => ({ id: "root", title: "26年年度OKR", type: "ROOT", main_owner: "公司" }), []);
+    const root = useMemo(
+      () => ({ id: "root", title: "26年年度OKR", type: "ROOT", main_owner: "公司" }),
+      []
+    );
 
     function setRef(key, el) {
       if (!key) return;
@@ -604,7 +682,6 @@ export default function App() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [scale]);
 
-    // ✅ Ctrl/⌘ + 滚轮缩放（可选但很好用）
     useEffect(() => {
       const el = wrapRef.current;
       if (!el) return;
@@ -613,7 +690,6 @@ export default function App() {
         const isZoomGesture = e.ctrlKey || e.metaKey;
         if (!isZoomGesture) return;
         e.preventDefault();
-
         setScale((s) => {
           const next = clamp(s + (e.deltaY > 0 ? -0.08 : 0.08), 0.5, 2.0);
           return round2(next);
@@ -641,41 +717,24 @@ export default function App() {
       setScale(1);
     }
 
-    // ✅ 适配：让内容大致塞进可视区（简易版）
     function fitZoom() {
       const wrap = wrapRef.current;
       const content = contentRef.current;
       if (!wrap || !content) return;
 
-      // 先临时设为 1，测量真实大小
-      const prev = scale;
       setScale(1);
-
-      // 下一帧计算
       requestAnimationFrame(() => {
         const wr = wrap.getBoundingClientRect();
         const cr = content.getBoundingClientRect();
-
-        // 留一点边距
-        const padding = 40;
+        const padding = 56;
         const availW = wr.width - padding;
         const availH = wr.height - padding;
-
         const ratioW = availW / cr.width;
         const ratioH = availH / cr.height;
         const next = round2(clamp(Math.min(ratioW, ratioH), 0.5, 2.0));
-
         setScale(next);
-
-        // 如果你希望适配后自动滚回顶部居中
-        requestAnimationFrame(() => {
-          wrap.scrollTo({ top: 0, left: 0, behavior: "smooth" });
-          // 还原 prev 不需要：我们已经 setScale(next)
-        });
+        requestAnimationFrame(() => wrap.scrollTo({ top: 0, left: 0, behavior: "smooth" }));
       });
-
-      // 避免 ESLint unused
-      void prev;
     }
 
     const allKrs = objectives.flatMap((o) => o.krs || []);
@@ -688,23 +747,33 @@ export default function App() {
           );
 
     return (
-      <div style={styles.treeOuter}>
+      <div style={styles.panel}>
         <div style={styles.treeTopBar}>
-          <div style={styles.treeHint}>
-            提示：按住 Ctrl/⌘ + 滚轮可缩放。点击 KR 卡片可打开复盘。
+          <div>
+            <div style={styles.h3}>目标关系树</div>
+            <div style={styles.muted}>
+              提示：按住 Ctrl/⌘ + 滚轮缩放；点击 KR 卡片可打开复盘。
+            </div>
           </div>
 
           <div style={styles.zoomBar}>
-            <button style={styles.zoomBtn} onClick={zoomOut}>－</button>
-            <div style={styles.zoomLabel}>{Math.round(scale * 100)}%</div>
-            <button style={styles.zoomBtn} onClick={zoomIn}>＋</button>
-            <button style={styles.zoomBtn2} onClick={fitZoom}>适配</button>
-            <button style={styles.zoomBtn2} onClick={resetZoom}>重置</button>
+            <GlowButton variant="soft" onClick={zoomOut}>
+              －
+            </GlowButton>
+            <Chip tone="cyan">{Math.round(scale * 100)}%</Chip>
+            <GlowButton variant="soft" onClick={zoomIn}>
+              ＋
+            </GlowButton>
+            <GlowButton variant="ghost" onClick={fitZoom}>
+              适配
+            </GlowButton>
+            <GlowButton variant="ghost" onClick={resetZoom}>
+              重置
+            </GlowButton>
           </div>
         </div>
 
         <div ref={wrapRef} style={styles.treeWrap}>
-          {/* 被缩放的内容层 */}
           <div
             ref={contentRef}
             style={{
@@ -712,7 +781,7 @@ export default function App() {
               transform: `scale(${scale})`,
               transformOrigin: "top left",
               width: "max-content",
-              padding: 20,
+              padding: 22,
             }}
           >
             <svg style={styles.treeSvg}>
@@ -723,7 +792,7 @@ export default function App() {
                   y1={ln.y1}
                   x2={ln.x2}
                   y2={ln.y2}
-                  stroke="#d1d5db"
+                  stroke="rgba(155, 255, 235, 0.35)"
                   strokeWidth="2"
                 />
               ))}
@@ -735,11 +804,14 @@ export default function App() {
                 ref={(el) => setRef("root", el)}
                 style={{ ...styles.nodeCard, ...styles.nodeRoot }}
               >
-                <div style={styles.nodeTitle}>{root.title}</div>
+                <div style={styles.nodeTitle}>
+                  <span style={styles.nodeGlyph}>⟡</span>
+                  {root.title}
+                </div>
                 <div style={styles.nodeSubSmall}>负责人：{ownerLabel(root)}</div>
                 <div style={styles.nodeMeta}>
-                  类型：公司
-                  <span style={{ float: "right", fontWeight: 700 }}>{rootProgress}%</span>
+                  <span style={{ color: "rgba(234,242,255,0.72)" }}>类型：公司</span>
+                  <span style={styles.nodeProgress}>{rootProgress}%</span>
                 </div>
               </div>
             </div>
@@ -762,15 +834,18 @@ export default function App() {
                     <div
                       key={o.id}
                       ref={(el) => setRef(`o:${o.id}`, el)}
-                      style={{ ...styles.nodeCard, minWidth: 260 }}
+                      style={styles.nodeCard}
                       title={o.title}
                     >
-                      <div style={styles.nodeTitle}>{`O${idx + 1}`}</div>
+                      <div style={styles.nodeTitle}>
+                        <span style={styles.nodeGlyph}>◈</span>
+                        {`O${idx + 1}`}
+                      </div>
                       <div style={styles.nodeSub}>{o.title}</div>
                       <div style={styles.nodeSubSmall}>负责人：{ownerLabel(o)}</div>
                       <div style={styles.nodeMeta}>
-                        类型：公司
-                        <span style={{ float: "right", fontWeight: 700 }}>{oProgress}%</span>
+                        <span style={{ color: "rgba(234,242,255,0.72)" }}>类型：公司</span>
+                        <span style={styles.nodeProgress}>{oProgress}%</span>
                       </div>
                     </div>
                   );
@@ -793,14 +868,17 @@ export default function App() {
                           onClick={() => setCheckinModalKr({ kr: k, isEditing: false })}
                           title="点击打开复盘"
                         >
-                          <div style={styles.nodeTitle}>{`KR${kIdx + 1}`}</div>
+                          <div style={styles.nodeTitle}>
+                            <span style={styles.nodeGlyph}>⟢</span>
+                            {`KR${kIdx + 1}`}
+                          </div>
                           <div style={styles.nodeSub}>{k.title}</div>
                           <div style={styles.nodeSubSmall}>负责人：{ownerLabel(k)}</div>
                           <div style={styles.nodeMeta}>
-                            <span style={{ color: "#6b7280" }}>
+                            <span style={{ color: "rgba(234,242,255,0.70)" }}>
                               {k.current_value ?? 0}/{k.target_value ?? "-"}
                             </span>
-                            <span style={{ float: "right", fontWeight: 700 }}>{p}%</span>
+                            <span style={styles.nodeProgress}>{p}%</span>
                           </div>
                         </div>
                       );
@@ -810,6 +888,9 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Subtle scanline overlay */}
+          <div style={styles.scanlines} />
         </div>
       </div>
     );
@@ -819,27 +900,52 @@ export default function App() {
   if (!session) {
     return (
       <div style={styles.center}>
-        <h2 style={{ margin: 0 }}>OKR 系统登录</h2>
-        <div style={{ color: "#6b7280", fontSize: 13 }}>邮箱登录（Magic Link）</div>
-        <input
-          style={styles.input}
-          placeholder="输入邮箱"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <button style={styles.button} onClick={signIn} disabled={authSending}>
-          {authSending ? "发送中..." : "发送登录链接"}
-        </button>
+        <div style={styles.loginCard}>
+          <div style={styles.brandRow}>
+            <div style={styles.brandMark} />
+            <div>
+              <div style={styles.brandTitle}>OKR Nexus</div>
+              <div style={styles.brandSub}>未来感 OKR 协作与复盘系统</div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <div style={styles.h3}>登录</div>
+            <div style={styles.muted}>邮箱登录（Magic Link）</div>
+          </div>
+
+          <input
+            style={styles.input}
+            placeholder="输入邮箱"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+
+          <GlowButton onClick={signIn} disabled={authSending}>
+            {authSending ? "发送中..." : "发送登录链接"}
+          </GlowButton>
+
+          <div style={{ marginTop: 12, ...styles.muted }}>
+            * 若没收到邮件，请检查垃圾箱或稍后重试
+          </div>
+        </div>
       </div>
     );
   }
 
   return (
     <div style={styles.container} ref={menuRootRef}>
-      <div style={styles.header}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <h2 style={{ margin: 0 }}>OKR（O → KR）</h2>
+      {/* Top Nav */}
+      <div style={styles.topbar}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={styles.logoOrb} />
+          <div>
+            <div style={styles.appTitle}>OKR Nexus</div>
+            <div style={styles.appSub}>O → KR · 月度复盘 · 关系树</div>
+          </div>
+        </div>
 
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={styles.tabs}>
             <button
               style={page === "list" ? styles.tabActive : styles.tab}
@@ -854,40 +960,59 @@ export default function App() {
               关系树
             </button>
           </div>
-        </div>
 
-        <button style={styles.link} onClick={signOut}>
-          退出
-        </button>
+          <GlowButton variant="ghost" onClick={signOut}>
+            退出
+          </GlowButton>
+        </div>
       </div>
 
+      {/* Content */}
       {page === "tree" ? (
         <TreeView objectives={objectives} />
       ) : (
         <>
-          <div style={styles.card}>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>新增 Objective</div>
-            <input
-              style={styles.input}
-              placeholder="例如：打造稳定可复制的电商增长引擎，实现高质量盈利"
-              value={newOTitle}
-              onChange={(e) => setNewOTitle(e.target.value)}
-            />
-            <input
-              style={styles.input}
-              placeholder="主要负责人（例如：张三）"
-              value={newOMainOwner}
-              onChange={(e) => setNewOMainOwner(e.target.value)}
-            />
+          {/* Create O */}
+          <div style={styles.panel}>
+            <div style={styles.panelHeader}>
+              <div>
+                <div style={styles.h3}>新增 Objective</div>
+                <div style={styles.muted}>建议：一条 O 配 2–4 条可量化 KR</div>
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {loading ? <Chip tone="violet">同步中</Chip> : <Chip>在线</Chip>}
+              </div>
+            </div>
 
-            {newOError ? <div style={styles.error}>{newOError}</div> : null}
-            <button style={styles.button} onClick={addObjective} disabled={loading}>
+            <div style={styles.formRow}>
+              <div style={{ flex: 2 }}>
+                <div style={styles.label}>Objective</div>
+                <input
+                  style={styles.input}
+                  placeholder="例如：打造稳定可复制的电商增长引擎，实现高质量盈利"
+                  value={newOTitle}
+                  onChange={(e) => setNewOTitle(e.target.value)}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={styles.label}>主要负责人</div>
+                <input
+                  style={styles.input}
+                  placeholder="例如：张三"
+                  value={newOMainOwner}
+                  onChange={(e) => setNewOMainOwner(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {newOError ? <div style={styles.toastErr}>{newOError}</div> : null}
+
+            <GlowButton onClick={addObjective} disabled={loading}>
               {loading ? "处理中..." : "新增 O"}
-            </button>
+            </GlowButton>
           </div>
 
-          {loading ? <div style={{ color: "#6b7280" }}>加载中...</div> : null}
-
+          {/* List */}
           {objectives.map((o, idx) => {
             const isEditing = editingOId === o.id;
             const krDraft =
@@ -901,197 +1026,236 @@ export default function App() {
               };
 
             return (
-              <div key={o.id} style={styles.card}>
+              <div key={o.id} style={styles.panel}>
+                {/* O Header */}
                 <div style={styles.oHeader}>
-                  <div style={{ fontWeight: 800, fontSize: 16 }}>
-                    {`O${idx + 1}：`}
+                  <div>
+                    <div style={styles.oTitle}>
+                      <span style={styles.oIndex}>{`O${idx + 1}`}</span>
+                      {isEditing ? (
+                        <input
+                          style={styles.titleInput}
+                          defaultValue={o.title}
+                          onBlur={(e) => updateTitle(o.id, e.target.value)}
+                        />
+                      ) : (
+                        <span style={{ marginLeft: 10 }}>{o.title}</span>
+                      )}
+                    </div>
+
+                    <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <Chip tone="violet">负责人：{ownerLabel(o)}</Chip>
+                      {isEditing ? (
+                        <span style={styles.muted}>（编辑负责人：输入后点空白处保存）</span>
+                      ) : null}
+                    </div>
+
                     {isEditing ? (
-                      <input
-                        style={styles.titleInput}
-                        defaultValue={o.title}
-                        onBlur={(e) => updateTitle(o.id, e.target.value)}
-                      />
-                    ) : (
-                      <span>{o.title}</span>
-                    )}
+                      <div style={{ marginTop: 10, maxWidth: 360 }}>
+                        <div style={styles.label}>主要负责人（可修改）</div>
+                        <input
+                          style={styles.input}
+                          defaultValue={o.main_owner || ""}
+                          placeholder="例如：张三"
+                          onBlur={(e) => updateMainOwner(o.id, e.target.value)}
+                        />
+                      </div>
+                    ) : null}
                   </div>
 
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <button
-                      style={styles.secondary}
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <GlowButton
+                      variant={isEditing ? "soft" : "primary"}
                       onClick={() => {
                         setMenuOpenKey(null);
                         setEditingOId(isEditing ? null : o.id);
-                        if (isEditing && checkinModalKr) setCheckinModalKr({ ...checkinModalKr, isEditing: false });
+                        if (isEditing && checkinModalKr) {
+                          setCheckinModalKr({ ...checkinModalKr, isEditing: false });
+                        }
                       }}
                     >
                       {isEditing ? "完成" : "修改"}
-                    </button>
+                    </GlowButton>
 
                     {isEditing ? (
                       <MoreMenu
                         menuKey={`o:${o.id}`}
-                        items={[{ label: "删除 O", danger: true, onClick: () => deleteItem(o.id, `O${idx + 1}`) }]}
+                        items={[
+                          {
+                            label: "删除 O",
+                            danger: true,
+                            onClick: () => deleteItem(o.id, `O${idx + 1}`),
+                          },
+                        ]}
                       />
                     ) : null}
                   </div>
                 </div>
 
-                <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
-                  主要负责人：
-                  {isEditing ? (
-                    <input
-                      style={{ ...styles.inlineInput, marginLeft: 8, width: 220 }}
-                      defaultValue={o.main_owner || ""}
-                      placeholder="例如：张三"
-                      onBlur={(e) => updateMainOwner(o.id, e.target.value)}
-                    />
-                  ) : (
-                    <b style={{ marginLeft: 6, color: "#111827" }}>{ownerLabel(o)}</b>
-                  )}
-                </div>
-
+                {/* KR List */}
                 {o.krs.length ? (
-                  <div style={{ marginTop: 12, marginBottom: 12 }}>
-                    {o.krs.map((k, kIdx) => {
-                      const progress = calcProgress(k.current_value, k.target_value);
+                  <div style={{ marginTop: 16 }}>
+                    <div style={styles.sectionTitle}>关键结果 KR</div>
 
-                      return (
-                        <div key={k.id} style={styles.krRow}>
-                          <div style={styles.krHeader}>
-                            <div style={{ fontWeight: 800 }}>
-                              {`KR${kIdx + 1}：`}
-                              {isEditing ? (
-                                <input
-                                  style={styles.titleInputSmall}
-                                  defaultValue={k.title}
-                                  onBlur={(e) => updateTitle(k.id, e.target.value)}
-                                />
-                              ) : (
-                                <span>{k.title}</span>
-                              )}
+                    <div style={{ marginTop: 10 }}>
+                      {o.krs.map((k, kIdx) => {
+                        const progress = calcProgress(k.current_value, k.target_value);
+                        const tone = progress >= 80 ? "cyan" : progress >= 40 ? "violet" : "pink";
+
+                        return (
+                          <div key={k.id} style={styles.krRow}>
+                            <div style={styles.krHeader}>
+                              <div style={styles.krTitle}>
+                                <span style={styles.krIndex}>{`KR${kIdx + 1}`}</span>
+                                {isEditing ? (
+                                  <input
+                                    style={styles.titleInputSmall}
+                                    defaultValue={k.title}
+                                    onBlur={(e) => updateTitle(k.id, e.target.value)}
+                                  />
+                                ) : (
+                                  <span style={{ marginLeft: 10 }}>{k.title}</span>
+                                )}
+                              </div>
+
+                              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                                <Chip tone={tone}>进度 {progress}%</Chip>
+
+                                <GlowButton
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setMenuOpenKey(null);
+                                    setCheckinModalKr({ kr: k, isEditing });
+                                  }}
+                                >
+                                  复盘
+                                </GlowButton>
+
+                                {isEditing ? (
+                                  <MoreMenu
+                                    menuKey={`kr:${k.id}`}
+                                    items={[
+                                      {
+                                        label: "删除 KR",
+                                        danger: true,
+                                        onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
+                                      },
+                                    ]}
+                                  />
+                                ) : null}
+                              </div>
                             </div>
 
-                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                              <div style={{ color: "#6b7280", fontSize: 12 }}>{`进度 ${progress}%`}</div>
-                              <button
-                                style={styles.ghost}
-                                onClick={() => {
-                                  setMenuOpenKey(null);
-                                  setCheckinModalKr({ kr: k, isEditing });
-                                }}
-                              >
-                                复盘
-                              </button>
+                            {/* KR Meta */}
+                            <div style={styles.krMetaGrid}>
+                              <div>
+                                <div style={styles.label}>主要负责人</div>
+                                {isEditing ? (
+                                  <input
+                                    style={styles.input}
+                                    defaultValue={k.main_owner || ""}
+                                    placeholder="例如：李四"
+                                    onBlur={(e) => updateMainOwner(k.id, e.target.value)}
+                                  />
+                                ) : (
+                                  <div style={styles.metaValue}>{ownerLabel(k)}</div>
+                                )}
+                              </div>
 
-                              {isEditing ? (
-                                <MoreMenu
-                                  menuKey={`kr:${k.id}`}
-                                  items={[{ label: "删除 KR", danger: true, onClick: () => deleteItem(k.id, `KR${kIdx + 1}`) }]}
-                                />
-                              ) : null}
+                              <div>
+                                <div style={styles.label}>目标值</div>
+                                {isEditing ? (
+                                  <input
+                                    style={styles.input}
+                                    type="number"
+                                    defaultValue={k.target_value ?? 0}
+                                    onBlur={(e) => updateKRTarget(k.id, e.target.value)}
+                                  />
+                                ) : (
+                                  <div style={styles.metaValue}>{k.target_value ?? "-"}</div>
+                                )}
+                              </div>
+
+                              <div>
+                                <div style={styles.label}>当前值</div>
+                                {isEditing ? (
+                                  <input
+                                    style={styles.input}
+                                    type="number"
+                                    defaultValue={k.current_value ?? 0}
+                                    onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
+                                  />
+                                ) : (
+                                  <div style={styles.metaValue}>{k.current_value ?? 0}</div>
+                                )}
+                              </div>
                             </div>
                           </div>
-
-                          <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
-                            主要负责人：
-                            {isEditing ? (
-                              <input
-                                style={{ ...styles.inlineInput, marginLeft: 8, width: 220 }}
-                                defaultValue={k.main_owner || ""}
-                                placeholder="例如：李四"
-                                onBlur={(e) => updateMainOwner(k.id, e.target.value)}
-                              />
-                            ) : (
-                              <b style={{ marginLeft: 6, color: "#111827" }}>{ownerLabel(k)}</b>
-                            )}
-                          </div>
-
-                          <div style={styles.krMeta}>
-                            <span>目标：</span>
-                            {isEditing ? (
-                              <input
-                                style={styles.inlineInput}
-                                type="number"
-                                defaultValue={k.target_value ?? 0}
-                                onBlur={(e) => updateKRTarget(k.id, e.target.value)}
-                              />
-                            ) : (
-                              <b>{k.target_value ?? "-"}</b>
-                            )}
-
-                            <span style={{ marginLeft: 10 }}>当前：</span>
-                            {isEditing ? (
-                              <input
-                                style={styles.inlineInput}
-                                type="number"
-                                defaultValue={k.current_value ?? 0}
-                                onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
-                              />
-                            ) : (
-                              <b>{k.current_value ?? 0}</b>
-                            )}
-
-                            {isEditing ? (
-                              <span style={{ marginLeft: 8, color: "#6b7280", fontSize: 12 }}>
-                                （改完点空白处自动保存）
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 ) : (
-                  <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10, marginBottom: 12 }}>
+                  <div style={{ marginTop: 14, ...styles.muted }}>
                     还没有 KR，建议先拆 2–4 个可量化的关键结果。
                   </div>
                 )}
 
+                {/* Add KR */}
                 {isEditing ? (
-                  <div style={styles.subCard}>
-                    <div style={{ fontWeight: 700, marginBottom: 8 }}>新增 KR</div>
-                    <input
-                      style={styles.input}
-                      placeholder="KR 描述（必填）例如：内容电商 GSV ≥ 2600 万"
-                      value={krDraft.title}
-                      onChange={(e) => setKRDraft(o.id, { title: e.target.value })}
-                    />
-                    <input
-                      style={styles.input}
-                      placeholder="主要负责人（例如：李四）"
-                      value={krDraft.main_owner}
-                      onChange={(e) => setKRDraft(o.id, { main_owner: e.target.value })}
-                    />
+                  <div style={{ marginTop: 18, ...styles.subPanel }}>
+                    <div style={styles.sectionTitle}>新增 KR</div>
+                    <div style={{ marginTop: 10 }}>
+                      <div style={styles.formRow}>
+                        <div style={{ flex: 2 }}>
+                          <div style={styles.label}>KR 描述</div>
+                          <input
+                            style={styles.input}
+                            placeholder="例如：内容电商 GSV ≥ 2600 万"
+                            value={krDraft.title}
+                            onChange={(e) => setKRDraft(o.id, { title: e.target.value })}
+                          />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={styles.label}>主要负责人</div>
+                          <input
+                            style={styles.input}
+                            placeholder="例如：李四"
+                            value={krDraft.main_owner}
+                            onChange={(e) => setKRDraft(o.id, { main_owner: e.target.value })}
+                          />
+                        </div>
+                      </div>
 
-                    <div style={styles.grid2}>
-                      <div>
-                        <div style={styles.label}>目标值（必填）</div>
-                        <input
-                          style={styles.input}
-                          type="number"
-                          placeholder="例如：26000000"
-                          value={krDraft.target}
-                          onChange={(e) => setKRDraft(o.id, { target: e.target.value })}
-                        />
+                      <div style={styles.grid2}>
+                        <div>
+                          <div style={styles.label}>目标值（必填）</div>
+                          <input
+                            style={styles.input}
+                            type="number"
+                            placeholder="例如：26000000"
+                            value={krDraft.target}
+                            onChange={(e) => setKRDraft(o.id, { target: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <div style={styles.label}>当前值（可选）</div>
+                          <input
+                            style={styles.input}
+                            type="number"
+                            placeholder="例如：5000000"
+                            value={krDraft.current}
+                            onChange={(e) => setKRDraft(o.id, { current: e.target.value })}
+                          />
+                        </div>
                       </div>
-                      <div>
-                        <div style={styles.label}>当前值（可选，默认 0）</div>
-                        <input
-                          style={styles.input}
-                          type="number"
-                          placeholder="例如：5000000"
-                          value={krDraft.current}
-                          onChange={(e) => setKRDraft(o.id, { current: e.target.value })}
-                        />
-                      </div>
+
+                      {krDraft.error ? <div style={styles.toastErr}>{krDraft.error}</div> : null}
+
+                      <GlowButton onClick={() => addKR(o.id)} disabled={krDraft.saving}>
+                        {krDraft.saving ? "新增中..." : "新增 KR"}
+                      </GlowButton>
                     </div>
-
-                    {krDraft.error ? <div style={styles.error}>{krDraft.error}</div> : null}
-
-                    <button style={styles.button} onClick={() => addKR(o.id)} disabled={krDraft.saving}>
-                      {krDraft.saving ? "新增中..." : "新增 KR"}
-                    </button>
                   </div>
                 ) : null}
               </div>
@@ -1100,6 +1264,7 @@ export default function App() {
         </>
       )}
 
+      {/* Modal */}
       <Modal
         open={!!checkinModalKr}
         title={
@@ -1115,225 +1280,394 @@ export default function App() {
             isEditing={checkinModalKr.isEditing}
             history={(checkinsByKr[checkinModalKr.kr.id] || []).slice().reverse()}
             draft={
-              checkinDrafts[checkinModalKr.kr.id] || { month: "", value: "", note: "", saving: false, error: "" }
+              checkinDrafts[checkinModalKr.kr.id] || {
+                month: "",
+                value: "",
+                note: "",
+                saving: false,
+                error: "",
+              }
             }
           />
         ) : null}
       </Modal>
+
+      {/* Footer vibe */}
+      <div style={styles.footer}>
+        <span style={{ opacity: 0.75 }}>OKR Nexus</span>
+        <span style={{ opacity: 0.55 }}>·</span>
+        <span style={{ opacity: 0.65 }}>Futuristic UI</span>
+      </div>
     </div>
   );
 }
 
+/* ----------------------------- FUTURE UI STYLES ----------------------------- */
 const styles = {
-  center: {
-    minHeight: "100vh",
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-  },
   container: {
-    maxWidth: 1100,
-    margin: "40px auto",
-    padding: 16,
+    maxWidth: 1180,
+    margin: "28px auto",
+    padding: "0 16px 40px",
   },
-  header: {
+
+  // Topbar
+  topbar: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 18,
+    gap: 12,
+    padding: 16,
+    borderRadius: 18,
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
+    border: "1px solid rgba(155, 255, 235, 0.18)",
+    boxShadow:
+      "0 14px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(138,180,255,0.08) inset",
+    backdropFilter: "blur(10px)",
+    position: "sticky",
+    top: 14,
+    zIndex: 5,
+  },
+  logoOrb: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
+    background:
+      "radial-gradient(circle at 30% 30%, rgba(0,255,209,0.9), rgba(88,101,242,0.85) 45%, rgba(255,72,196,0.45) 80%)",
+    boxShadow:
+      "0 0 24px rgba(0,255,209,0.22), 0 0 34px rgba(88,101,242,0.25)",
+    border: "1px solid rgba(255,255,255,0.18)",
+  },
+  appTitle: {
+    fontWeight: 900,
+    letterSpacing: 0.3,
+    fontSize: 18,
+    color: "#EAF2FF",
+    textShadow: "0 0 18px rgba(88,101,242,0.20)",
+  },
+  appSub: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "rgba(234,242,255,0.65)",
   },
 
   tabs: {
     display: "flex",
     gap: 6,
-    padding: 4,
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
-    background: "#fff",
+    padding: 6,
+    borderRadius: 14,
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(155, 255, 235, 0.14)",
+    boxShadow: "0 0 0 1px rgba(88,101,242,0.07) inset",
   },
   tab: {
-    padding: "8px 12px",
-    borderRadius: 10,
-    border: "none",
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid transparent",
     background: "transparent",
     cursor: "pointer",
-    fontWeight: 700,
-    color: "#374151",
+    fontWeight: 800,
+    color: "rgba(234,242,255,0.72)",
   },
   tabActive: {
-    padding: "8px 12px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#f3f4f6",
+    padding: "10px 12px",
+    borderRadius: 12,
     cursor: "pointer",
-    fontWeight: 800,
-    color: "#111827",
+    fontWeight: 900,
+    color: "#061024",
+    border: "1px solid rgba(0,255,209,0.45)",
+    background:
+      "linear-gradient(90deg, rgba(0,255,209,0.95), rgba(88,101,242,0.95))",
+    boxShadow:
+      "0 10px 22px rgba(0,255,209,0.14), 0 10px 22px rgba(88,101,242,0.14)",
   },
 
-  card: {
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-    background: "#fff",
+  // Panels (glass cards)
+  panel: {
+    marginTop: 16,
+    borderRadius: 18,
+    padding: 16,
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03))",
+    border: "1px solid rgba(155, 255, 235, 0.16)",
+    boxShadow:
+      "0 18px 50px rgba(0,0,0,0.50), 0 0 0 1px rgba(138,180,255,0.08) inset",
+    backdropFilter: "blur(10px)",
   },
-  subCard: {
-    borderTop: "1px dashed #e5e7eb",
-    paddingTop: 12,
-    marginTop: 12,
+  subPanel: {
+    borderRadius: 16,
+    padding: 14,
+    background: "rgba(8, 12, 28, 0.35)",
+    border: "1px dashed rgba(155, 255, 235, 0.22)",
+  },
+  panelHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    alignItems: "flex-start",
+  },
+
+  // Typography
+  h3: {
+    fontWeight: 900,
+    fontSize: 16,
+    letterSpacing: 0.25,
+    marginBottom: 4,
+  },
+  sectionTitle: {
+    fontWeight: 900,
+    letterSpacing: 0.2,
+    color: "rgba(234,242,255,0.92)",
+  },
+  muted: {
+    color: "rgba(234,242,255,0.62)",
+    fontSize: 12,
+  },
+
+  // Inputs
+  label: {
+    fontSize: 12,
+    color: "rgba(234,242,255,0.65)",
+    marginBottom: 6,
+    letterSpacing: 0.2,
   },
   input: {
     width: "100%",
-    padding: 10,
-    borderRadius: 10,
-    border: "1px solid #d1d5db",
-    marginBottom: 10,
+    padding: "11px 12px",
+    borderRadius: 14,
+    border: "1px solid rgba(155, 255, 235, 0.16)",
+    background: "rgba(8, 12, 28, 0.55)",
+    color: "#EAF2FF",
     outline: "none",
-  },
-  titleInput: {
-    width: 560,
-    maxWidth: "78vw",
-    padding: "6px 10px",
-    borderRadius: 10,
-    border: "1px solid #d1d5db",
-    outline: "none",
-    fontWeight: 700,
-    marginLeft: 6,
-  },
-  titleInputSmall: {
-    width: 520,
-    maxWidth: "72vw",
-    padding: "6px 10px",
-    borderRadius: 10,
-    border: "1px solid #d1d5db",
-    outline: "none",
-    fontWeight: 700,
-    marginLeft: 6,
+    boxShadow: "0 0 0 1px rgba(88,101,242,0.08) inset",
   },
   inlineInput: {
     width: 140,
-    padding: "6px 10px",
-    borderRadius: 10,
-    border: "1px solid #d1d5db",
+    padding: "9px 10px",
+    borderRadius: 14,
+    border: "1px solid rgba(155, 255, 235, 0.16)",
+    background: "rgba(8, 12, 28, 0.55)",
+    color: "#EAF2FF",
     outline: "none",
   },
-  grid2: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: 10,
-  },
-  grid3: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr 2fr",
-    gap: 10,
-  },
-  label: {
-    fontSize: 12,
-    color: "#6b7280",
-    marginBottom: 6,
-  },
-  button: {
+
+  // Buttons
+  btnBase: {
+    border: "none",
+    borderRadius: 14,
     padding: "10px 14px",
-    background: "#111827",
-    color: "#fff",
-    border: "none",
-    borderRadius: 10,
-    cursor: "pointer",
+    fontWeight: 900,
+    letterSpacing: 0.2,
+    transition: "transform 120ms ease, filter 120ms ease",
   },
-  secondary: {
-    padding: "8px 12px",
-    background: "#f3f4f6",
-    color: "#111827",
-    border: "1px solid #e5e7eb",
-    borderRadius: 10,
-    cursor: "pointer",
-    fontWeight: 600,
+  btnPrimary: {
+    color: "#061024",
+    background:
+      "linear-gradient(90deg, rgba(0,255,209,0.95), rgba(88,101,242,0.95), rgba(255,72,196,0.70))",
+    boxShadow:
+      "0 16px 30px rgba(0,255,209,0.12), 0 16px 30px rgba(88,101,242,0.16), 0 0 0 1px rgba(255,255,255,0.10) inset",
   },
-  ghost: {
-    padding: "8px 10px",
-    background: "#fff",
-    color: "#111827",
-    border: "1px solid #e5e7eb",
-    borderRadius: 10,
-    cursor: "pointer",
-    fontWeight: 700,
+  btnSoft: {
+    color: "#EAF2FF",
+    background: "rgba(255,255,255,0.06)",
+    border: "1px solid rgba(155, 255, 235, 0.18)",
+    boxShadow: "0 0 0 1px rgba(88,101,242,0.08) inset",
   },
-  link: {
-    background: "none",
-    border: "none",
-    color: "#2563eb",
-    cursor: "pointer",
-    fontSize: 14,
+  btnGhost: {
+    color: "rgba(234,242,255,0.88)",
+    background: "rgba(8, 12, 28, 0.30)",
+    border: "1px solid rgba(155, 255, 235, 0.14)",
+    boxShadow: "0 0 0 1px rgba(88,101,242,0.06) inset",
   },
-  error: {
-    color: "#b91c1c",
-    background: "#fef2f2",
-    border: "1px solid #fecaca",
-    padding: "8px 10px",
-    borderRadius: 10,
+
+  // Chips
+  chip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "6px 10px",
+    borderRadius: 999,
+    fontWeight: 900,
+    fontSize: 12,
+    letterSpacing: 0.2,
+    border: "1px solid rgba(255,255,255,0.10)",
+    background: "rgba(255,255,255,0.06)",
+    boxShadow: "0 0 0 1px rgba(88,101,242,0.06) inset",
+  },
+  chipCyan: {
+    border: "1px solid rgba(0,255,209,0.28)",
+    boxShadow: "0 0 18px rgba(0,255,209,0.08)",
+    color: "rgba(234,242,255,0.92)",
+  },
+  chipViolet: {
+    border: "1px solid rgba(88,101,242,0.30)",
+    boxShadow: "0 0 18px rgba(88,101,242,0.10)",
+    color: "rgba(234,242,255,0.92)",
+  },
+  chipPink: {
+    border: "1px solid rgba(255,72,196,0.26)",
+    boxShadow: "0 0 18px rgba(255,72,196,0.08)",
+    color: "rgba(234,242,255,0.92)",
+  },
+
+  // Toast / errors
+  toastErr: {
+    marginTop: 10,
     marginBottom: 10,
-    fontSize: 13,
+    padding: "10px 12px",
+    borderRadius: 14,
+    background: "rgba(255, 72, 196, 0.10)",
+    border: "1px solid rgba(255, 72, 196, 0.26)",
+    color: "#FFD6F0",
+    boxShadow: "0 0 26px rgba(255,72,196,0.12)",
+    fontWeight: 800,
   },
+
+  // O / KR blocks
   oHeader: {
     display: "flex",
-    alignItems: "center",
     justifyContent: "space-between",
-    gap: 10,
+    alignItems: "flex-start",
+    gap: 12,
   },
+  oTitle: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    fontWeight: 900,
+    fontSize: 16,
+    letterSpacing: 0.2,
+  },
+  oIndex: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 46,
+    padding: "6px 10px",
+    borderRadius: 14,
+    background:
+      "linear-gradient(90deg, rgba(88,101,242,0.85), rgba(0,255,209,0.75))",
+    color: "#061024",
+    boxShadow: "0 0 22px rgba(88,101,242,0.16)",
+  },
+  titleInput: {
+    width: 560,
+    maxWidth: "70vw",
+    padding: "9px 10px",
+    borderRadius: 14,
+    border: "1px solid rgba(155, 255, 235, 0.18)",
+    background: "rgba(8, 12, 28, 0.55)",
+    color: "#EAF2FF",
+    outline: "none",
+    marginLeft: 8,
+    fontWeight: 900,
+  },
+  titleInputSmall: {
+    width: 520,
+    maxWidth: "66vw",
+    padding: "9px 10px",
+    borderRadius: 14,
+    border: "1px solid rgba(155, 255, 235, 0.18)",
+    background: "rgba(8, 12, 28, 0.55)",
+    color: "#EAF2FF",
+    outline: "none",
+    marginLeft: 8,
+    fontWeight: 900,
+  },
+
   krRow: {
-    border: "1px solid #eef2f7",
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-    background: "#fafafa",
+    marginTop: 12,
+    borderRadius: 18,
+    padding: 14,
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
+    border: "1px solid rgba(88,101,242,0.18)",
+    boxShadow:
+      "0 14px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,255,209,0.06) inset",
   },
   krHeader: {
     display: "flex",
     justifyContent: "space-between",
+    alignItems: "center",
     gap: 12,
-    alignItems: "center",
   },
-  krMeta: {
-    marginTop: 10,
-    fontSize: 13,
-    color: "#374151",
+  krTitle: {
     display: "flex",
     alignItems: "center",
-    flexWrap: "wrap",
-    gap: 6,
+    fontWeight: 900,
+    letterSpacing: 0.2,
   },
-  checkinRow: {
-    display: "flex",
+  krIndex: {
+    display: "inline-flex",
     alignItems: "center",
-    gap: 8,
-    padding: "10px 0",
-    borderBottom: "1px solid #eef2f7",
+    justifyContent: "center",
+    minWidth: 56,
+    padding: "6px 10px",
+    borderRadius: 14,
+    background: "rgba(0,255,209,0.12)",
+    border: "1px solid rgba(0,255,209,0.22)",
+    color: "#CFFFF3",
+    boxShadow: "0 0 18px rgba(0,255,209,0.08)",
   },
 
+  krMetaGrid: {
+    marginTop: 12,
+    display: "grid",
+    gridTemplateColumns: "1.2fr 1fr 1fr",
+    gap: 12,
+  },
+  metaValue: {
+    padding: "10px 12px",
+    borderRadius: 14,
+    background: "rgba(8, 12, 28, 0.38)",
+    border: "1px solid rgba(155, 255, 235, 0.12)",
+    color: "#EAF2FF",
+    fontWeight: 800,
+  },
+
+  // Layout helpers
+  grid2: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
+  },
+  grid3: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr 2fr",
+    gap: 12,
+  },
+  formRow: {
+    display: "flex",
+    gap: 12,
+    alignItems: "flex-end",
+    flexWrap: "wrap",
+    marginTop: 10,
+  },
+
+  // Menu
   iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    border: "1px solid rgba(155, 255, 235, 0.16)",
+    background: "rgba(8, 12, 28, 0.35)",
+    color: "#EAF2FF",
     cursor: "pointer",
     fontWeight: 900,
-    lineHeight: "1",
+    boxShadow: "0 0 0 1px rgba(88,101,242,0.06) inset",
   },
   menu: {
     position: "absolute",
     right: 0,
-    top: 42,
-    minWidth: 160,
-    background: "#fff",
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
-    boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
+    top: 48,
+    minWidth: 170,
+    background: "rgba(8, 12, 28, 0.88)",
+    border: "1px solid rgba(155, 255, 235, 0.18)",
+    borderRadius: 16,
+    boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
     padding: 6,
     zIndex: 20,
+    backdropFilter: "blur(10px)",
   },
   menuItem: {
     width: "100%",
@@ -1341,9 +1675,11 @@ const styles = {
     padding: "10px 10px",
     border: "none",
     background: "transparent",
-    borderRadius: 10,
+    borderRadius: 12,
     cursor: "pointer",
     fontSize: 14,
+    color: "rgba(234,242,255,0.90)",
+    fontWeight: 800,
   },
   menuItemDanger: {
     width: "100%",
@@ -1351,16 +1687,18 @@ const styles = {
     padding: "10px 10px",
     border: "none",
     background: "transparent",
-    borderRadius: 10,
+    borderRadius: 12,
     cursor: "pointer",
     fontSize: 14,
-    color: "#b91c1c",
+    color: "#FF6BD6",
+    fontWeight: 900,
   },
 
+  // Modal
   modalMask: {
     position: "fixed",
     inset: 0,
-    background: "rgba(0,0,0,0.35)",
+    background: "rgba(0,0,0,0.55)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -1371,86 +1709,58 @@ const styles = {
     width: "min(980px, 96vw)",
     maxHeight: "86vh",
     overflow: "auto",
-    background: "#fff",
-    borderRadius: 14,
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 20px 50px rgba(0,0,0,0.18)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
+    borderRadius: 18,
+    border: "1px solid rgba(155, 255, 235, 0.18)",
+    boxShadow:
+      "0 26px 70px rgba(0,0,0,0.70), 0 0 0 1px rgba(88,101,242,0.10) inset",
+    backdropFilter: "blur(12px)",
   },
   modalHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     padding: "14px 14px 10px 14px",
-    borderBottom: "1px solid #eef2f7",
+    borderBottom: "1px solid rgba(155, 255, 235, 0.10)",
   },
   modalBody: {
     padding: 14,
   },
-  modalClose: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-    fontSize: 16,
-    lineHeight: "1",
+
+  // Checkins
+  checkinRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: "12px 0",
+    borderBottom: "1px solid rgba(155, 255, 235, 0.08)",
   },
 
-  treeOuter: {
-    border: "1px solid #e5e7eb",
-    borderRadius: 12,
-    background: "#fff",
-    padding: 14,
-  },
+  // Tree
   treeTopBar: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 10,
-  },
-  treeHint: {
-    color: "#6b7280",
-    fontSize: 12,
+    gap: 12,
+    marginBottom: 12,
   },
   zoomBar: {
     display: "flex",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
   },
-  zoomBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-    fontWeight: 900,
-    lineHeight: "1",
-  },
-  zoomBtn2: {
-    height: 34,
-    padding: "0 10px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-    fontWeight: 800,
-  },
-  zoomLabel: {
-    minWidth: 56,
-    textAlign: "center",
-    fontWeight: 900,
-    color: "#111827",
-  },
-
   treeWrap: {
     position: "relative",
     overflow: "auto",
-    borderRadius: 12,
-    background: "#fafafa",
-    border: "1px solid #eef2f7",
+    borderRadius: 18,
+    background:
+      "radial-gradient(900px 500px at 10% 20%, rgba(0,255,209,0.12), transparent 55%)," +
+      "radial-gradient(900px 500px at 90% 10%, rgba(88,101,242,0.14), transparent 60%)," +
+      "linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
+    border: "1px solid rgba(155, 255, 235, 0.14)",
     height: "72vh",
   },
   treeSvg: {
@@ -1459,6 +1769,15 @@ const styles = {
     width: "100%",
     height: "100%",
     pointerEvents: "none",
+  },
+  scanlines: {
+    pointerEvents: "none",
+    position: "absolute",
+    inset: 0,
+    background:
+      "repeating-linear-gradient(180deg, rgba(255,255,255,0.00) 0px, rgba(255,255,255,0.00) 6px, rgba(155,255,235,0.03) 7px)",
+    mixBlendMode: "overlay",
+    opacity: 0.35,
   },
   treeLevel: {
     position: "relative",
@@ -1477,43 +1796,132 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: 14,
-    minWidth: 260,
+    minWidth: 270,
   },
+
+  // Node cards
   nodeCard: {
-    width: 260,
-    borderRadius: 12,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
+    width: 270,
+    borderRadius: 18,
+    border: "1px solid rgba(155, 255, 235, 0.16)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03))",
     padding: 14,
-    boxShadow: "0 10px 25px rgba(0,0,0,0.06)",
+    boxShadow:
+      "0 18px 50px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,255,209,0.06) inset",
+    backdropFilter: "blur(10px)",
   },
   nodeRoot: {
-    width: 320,
+    width: 330,
+    border: "1px solid rgba(0,255,209,0.18)",
+    boxShadow:
+      "0 22px 60px rgba(0,0,0,0.55), 0 0 40px rgba(0,255,209,0.09), 0 0 0 1px rgba(88,101,242,0.09) inset",
   },
   nodeTitle: {
-    fontWeight: 900,
+    fontWeight: 950,
     fontSize: 16,
-    marginBottom: 6,
+    marginBottom: 8,
+    letterSpacing: 0.25,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: "#EAF2FF",
+  },
+  nodeGlyph: {
+    display: "inline-flex",
+    width: 28,
+    height: 28,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(0,255,209,0.10)",
+    border: "1px solid rgba(0,255,209,0.18)",
+    boxShadow: "0 0 18px rgba(0,255,209,0.10)",
+    color: "#CFFFF3",
+    fontWeight: 900,
   },
   nodeSub: {
-    color: "#374151",
+    color: "rgba(234,242,255,0.86)",
     fontSize: 13,
     marginBottom: 10,
     lineHeight: 1.35,
-    maxHeight: 40,
+    maxHeight: 44,
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
   nodeSubSmall: {
-    color: "#6b7280",
+    color: "rgba(234,242,255,0.65)",
     fontSize: 12,
     marginTop: 6,
     marginBottom: 10,
   },
   nodeMeta: {
-    color: "#6b7280",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    color: "rgba(234,242,255,0.65)",
     fontSize: 12,
-    borderTop: "1px solid #eef2f7",
+    borderTop: "1px solid rgba(155, 255, 235, 0.10)",
     paddingTop: 10,
+  },
+  nodeProgress: {
+    fontWeight: 900,
+    color: "#CFFFF3",
+    textShadow: "0 0 18px rgba(0,255,209,0.25)",
+  },
+
+  // Login
+  center: {
+    minHeight: "100vh",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  loginCard: {
+    width: "min(560px, 92vw)",
+    borderRadius: 22,
+    padding: 18,
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
+    border: "1px solid rgba(155, 255, 235, 0.18)",
+    boxShadow:
+      "0 28px 70px rgba(0,0,0,0.75), 0 0 0 1px rgba(88,101,242,0.10) inset",
+    backdropFilter: "blur(12px)",
+  },
+  brandRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+  },
+  brandMark: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    background:
+      "radial-gradient(circle at 30% 30%, rgba(255,72,196,0.9), rgba(88,101,242,0.85) 45%, rgba(0,255,209,0.55) 85%)",
+    boxShadow:
+      "0 0 22px rgba(255,72,196,0.18), 0 0 26px rgba(88,101,242,0.16)",
+    border: "1px solid rgba(255,255,255,0.18)",
+  },
+  brandTitle: {
+    fontWeight: 950,
+    letterSpacing: 0.4,
+    fontSize: 18,
+  },
+  brandSub: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "rgba(234,242,255,0.65)",
+  },
+
+  footer: {
+    marginTop: 18,
+    display: "flex",
+    justifyContent: "center",
+    gap: 10,
+    fontSize: 12,
+    color: "rgba(234,242,255,0.60)",
   },
 };
