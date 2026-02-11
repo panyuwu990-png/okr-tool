@@ -13,15 +13,15 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
-  const [checkins, setCheckins] = useState([]); // okr_checkins 全量（量不大时最省事）
+  const [checkins, setCheckins] = useState([]);
+
   const [newOTitle, setNewOTitle] = useState("");
   const [newOError, setNewOError] = useState("");
 
   // 每个 O 独立的 KR 草稿
   const [krDrafts, setKrDrafts] = useState({});
 
-  // 每个 KR 独立的“月度复盘草稿”
-  // { [krId]: { month:'YYYY-MM', value:'', note:'', saving:false, error:'' } }
+  // 每个 KR 独立的月度复盘草稿
   const [checkinDrafts, setCheckinDrafts] = useState({});
 
   // ---------- Auth ----------
@@ -58,8 +58,7 @@ export default function App() {
       return;
     }
     if (cksErr) {
-      // 复盘表如果还没建，会在这里报错：提醒你先跑 SQL
-      alert("加载 okr_checkins 失败（请确认已创建表）： " + (cksErr.message || "unknown error"));
+      alert("加载 okr_checkins 失败：" + (cksErr.message || "unknown error"));
       setCheckins([]);
     } else {
       setCheckins(cks || []);
@@ -68,8 +67,10 @@ export default function App() {
     const data = items || [];
     setRows(data);
 
-    // 初始化每个 O 的 KR 草稿
+    // 初始化草稿
     const os = data.filter((i) => i.type === "O");
+    const krs = data.filter((i) => i.type === "KR");
+
     setKrDrafts((prev) => {
       const next = { ...prev };
       for (const o of os) {
@@ -78,8 +79,6 @@ export default function App() {
       return next;
     });
 
-    // 初始化每个 KR 的复盘草稿（默认本月）
-    const krs = data.filter((i) => i.type === "KR");
     const now = new Date();
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     setCheckinDrafts((prev) => {
@@ -126,7 +125,6 @@ export default function App() {
   }
 
   function ymToFirstDay(ym) {
-    // '2026-01' => '2026-01-01'
     if (!ym || ym.length < 7) return null;
     return `${ym}-01`;
   }
@@ -176,6 +174,25 @@ export default function App() {
     await loadAll();
   }
 
+  async function updateItem(id, patch) {
+    const { error } = await supabase.from("okr_items").update(patch).eq("id", id);
+    if (error) {
+      alert("保存失败：" + (error.message || "unknown error"));
+      return false;
+    }
+    return true;
+  }
+
+  async function deleteItem(id, label) {
+    if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其复盘记录）`)) return;
+    const { error } = await supabase.from("okr_items").delete().eq("id", id);
+    if (error) {
+      alert("删除失败：" + (error.message || "unknown error"));
+      return;
+    }
+    await loadAll();
+  }
+
   function setKRDraft(objectiveId, patch) {
     setKrDrafts((prev) => ({
       ...prev,
@@ -211,11 +228,8 @@ export default function App() {
       title,
       type: "KR",
       parent_id: objectiveId,
-
-      // ✅ 继承父 O，避免 NOT NULL 报错
       level: parentO?.level || "company",
       department: parentO?.department || "company",
-
       target_value: target,
       current_value: current,
       owner_id: session.user.id,
@@ -224,7 +238,6 @@ export default function App() {
     };
 
     const { error } = await supabase.from("okr_items").insert(payload);
-
     if (error) {
       setKRDraft(objectiveId, { saving: false, error: "新增 KR 失败：" + (error.message || "unknown") });
       return;
@@ -234,19 +247,38 @@ export default function App() {
     await loadAll();
   }
 
-  // 直接更新 KR 当前值（你现在已有）
   async function updateKRCurrent(krId, newCurrentRaw) {
     const n = safeNumber(newCurrentRaw);
     if (!Number.isFinite(n) || n < 0) {
       alert("当前值必须是 ≥ 0 的数字");
       return;
     }
-    const { error } = await supabase.from("okr_items").update({ current_value: n }).eq("id", krId);
-    if (error) return alert("更新失败：" + (error.message || "unknown error"));
-    await loadAll();
+    const ok = await updateItem(krId, { current_value: n });
+    if (ok) await loadAll();
   }
 
-  // ---------- Check-in Actions（新增） ----------
+  async function updateKRTarget(krId, newTargetRaw) {
+    const n = safeNumber(newTargetRaw);
+    if (!Number.isFinite(n) || n <= 0) {
+      alert("目标值必须是 > 0 的数字");
+      return;
+    }
+    const ok = await updateItem(krId, { target_value: n });
+    if (ok) await loadAll();
+  }
+
+  async function updateTitle(id, raw) {
+    const title = (raw || "").trim();
+    if (!title) {
+      alert("标题不能为空");
+      await loadAll(); // 回滚显示
+      return;
+    }
+    const ok = await updateItem(id, { title });
+    if (ok) await loadAll();
+  }
+
+  // ---------- Check-in Actions ----------
   function setCheckinDraft(krId, patch) {
     setCheckinDrafts((prev) => ({
       ...prev,
@@ -270,7 +302,6 @@ export default function App() {
 
     setCheckinDraft(kr.id, { saving: true, error: "" });
 
-    // 1) 写入复盘记录
     const payload = {
       id: crypto.randomUUID(),
       kr_id: kr.id,
@@ -280,27 +311,41 @@ export default function App() {
       created_by: session.user.id,
     };
 
-    const { error: insErr } = await supabase.from("okr_checkins").insert(payload);
+    // ✅ upsert：同月覆盖
+    const { error: insErr } = await supabase
+      .from("okr_checkins")
+      .upsert(payload, { onConflict: "kr_id,month" });
+
     if (insErr) {
       setCheckinDraft(kr.id, { saving: false, error: "记录失败：" + (insErr.message || "unknown") });
       return;
     }
 
-    // 2) 同步更新 kr 当前值（让进度实时变化）
-    const { error: updErr } = await supabase
-      .from("okr_items")
-      .update({ current_value: valueNum })
-      .eq("id", kr.id);
-
-    if (updErr) {
-      // 复盘记录已成功，但 current_value 更新失败
-      setCheckinDraft(kr.id, { saving: false, error: "复盘已记，但更新当前值失败：" + (updErr.message || "unknown") });
+    // 同步更新当前值
+    const ok = await updateItem(kr.id, { current_value: valueNum });
+    if (!ok) {
+      setCheckinDraft(kr.id, { saving: false, error: "复盘已记，但更新当前值失败" });
       await loadAll();
       return;
     }
 
-    // 成功后清空 value/note，保留月份
     setCheckinDraft(kr.id, { value: "", note: "", saving: false, error: "" });
+    await loadAll();
+  }
+
+  async function updateCheckin(id, patch) {
+    const { error } = await supabase.from("okr_checkins").update(patch).eq("id", id);
+    if (error) {
+      alert("复盘更新失败：" + (error.message || "unknown error"));
+      return false;
+    }
+    return true;
+  }
+
+  async function deleteCheckin(id) {
+    if (!confirm("确认删除这条复盘记录？")) return;
+    const { error } = await supabase.from("okr_checkins").delete().eq("id", id);
+    if (error) return alert("删除失败：" + (error.message || "unknown error"));
     await loadAll();
   }
 
@@ -351,29 +396,56 @@ export default function App() {
 
         return (
           <div key={o.id} style={styles.card}>
-            <div style={{ fontWeight: 700, fontSize: 16, marginBottom: 10 }}>
-              {`O${idx + 1}：${o.title}`}
+            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ fontWeight: 700, fontSize: 16 }}>
+                {`O${idx + 1}：`}
+                <input
+                  style={styles.titleInput}
+                  defaultValue={o.title}
+                  onBlur={(e) => updateTitle(o.id, e.target.value)}
+                />
+              </div>
+              <button style={styles.danger} onClick={() => deleteItem(o.id, `O${idx + 1}`)}>
+                删除 O
+              </button>
             </div>
 
             {/* KR 列表 */}
             {o.krs.length ? (
-              <div style={{ marginBottom: 12 }}>
+              <div style={{ marginTop: 12, marginBottom: 12 }}>
                 {o.krs.map((k, kIdx) => {
                   const progress = calcProgress(k.current_value, k.target_value);
-                  const history = checkinsByKr[k.id] || [];
-
+                  const history = (checkinsByKr[k.id] || []).slice().reverse();
                   const d = checkinDrafts[k.id] || { month: "", value: "", note: "", saving: false, error: "" };
 
                   return (
                     <div key={k.id} style={styles.krRow}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                        <div style={{ fontWeight: 700 }}>{`KR${kIdx + 1}：${k.title}`}</div>
-                        <div style={{ color: "#6b7280", fontSize: 12 }}>{`进度 ${progress}%`}</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+                        <div style={{ fontWeight: 700 }}>
+                          {`KR${kIdx + 1}：`}
+                          <input
+                            style={styles.titleInput}
+                            defaultValue={k.title}
+                            onBlur={(e) => updateTitle(k.id, e.target.value)}
+                          />
+                        </div>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <div style={{ color: "#6b7280", fontSize: 12 }}>{`进度 ${progress}%`}</div>
+                          <button style={styles.danger} onClick={() => deleteItem(k.id, `KR${kIdx + 1}`)}>
+                            删除 KR
+                          </button>
+                        </div>
                       </div>
 
                       <div style={styles.krMeta}>
-                        <span>目标：{k.target_value ?? "-"}</span>
-                        <span style={{ marginLeft: 12 }}>当前：</span>
+                        <span>目标：</span>
+                        <input
+                          style={styles.inlineInput}
+                          type="number"
+                          defaultValue={k.target_value ?? 0}
+                          onBlur={(e) => updateKRTarget(k.id, e.target.value)}
+                        />
+                        <span style={{ marginLeft: 10 }}>当前：</span>
                         <input
                           style={styles.inlineInput}
                           type="number"
@@ -385,7 +457,7 @@ export default function App() {
                         </span>
                       </div>
 
-                      {/* ✅ 月度复盘（新增） */}
+                      {/* 月度复盘 */}
                       <div style={styles.subCard}>
                         <div style={{ fontWeight: 600, marginBottom: 8 }}>月度复盘（Check-in）</div>
 
@@ -422,24 +494,48 @@ export default function App() {
 
                         {d.error ? <div style={styles.error}>{d.error}</div> : null}
 
-                        <button
-                          style={styles.button}
-                          onClick={() => addCheckin(k)}
-                          disabled={d.saving}
-                        >
+                        <button style={styles.button} onClick={() => addCheckin(k)} disabled={d.saving}>
                           {d.saving ? "记录中..." : "记录本月复盘"}
                         </button>
 
-                        {/* 历史记录 */}
                         <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
-                          历史复盘（按时间排序）：
+                          历史复盘（可编辑 value / note，失焦保存）：
                         </div>
+
                         {history.length ? (
                           <div style={{ marginTop: 6, fontSize: 13 }}>
-                            {history.slice().reverse().map((h) => (
-                              <div key={h.id} style={{ padding: "4px 0", borderBottom: "1px solid #eef2f7" }}>
-                                <b>{String(h.month).slice(0, 7)}</b>：{h.value}
-                                {h.note ? <span style={{ color: "#6b7280" }}> · {h.note}</span> : null}
+                            {history.map((h) => (
+                              <div key={h.id} style={styles.checkinRow}>
+                                <b style={{ width: 80, display: "inline-block" }}>
+                                  {String(h.month).slice(0, 7)}
+                                </b>
+
+                                <span style={{ marginLeft: 8 }}>值：</span>
+                                <input
+                                  style={styles.inlineInput}
+                                  type="number"
+                                  defaultValue={h.value}
+                                  onBlur={async (e) => {
+                                    const n = safeNumber(e.target.value);
+                                    if (!Number.isFinite(n) || n < 0) return alert("复盘值必须 ≥ 0");
+                                    const ok = await updateCheckin(h.id, { value: n });
+                                    if (ok) await loadAll();
+                                  }}
+                                />
+
+                                <span style={{ marginLeft: 8 }}>备注：</span>
+                                <input
+                                  style={{ ...styles.inlineInput, width: 260 }}
+                                  defaultValue={h.note || ""}
+                                  onBlur={async (e) => {
+                                    const ok = await updateCheckin(h.id, { note: e.target.value });
+                                    if (ok) await loadAll();
+                                  }}
+                                />
+
+                                <button style={{ ...styles.danger, padding: "6px 10px" }} onClick={() => deleteCheckin(h.id)}>
+                                  删除
+                                </button>
                               </div>
                             ))}
                           </div>
@@ -452,12 +548,12 @@ export default function App() {
                 })}
               </div>
             ) : (
-              <div style={{ color: "#6b7280", fontSize: 13, marginBottom: 12 }}>
+              <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10, marginBottom: 12 }}>
                 还没有 KR，建议先拆 2–4 个可量化的关键结果。
               </div>
             )}
 
-            {/* 新增 KR（每个 O 独立） */}
+            {/* 新增 KR */}
             <div style={styles.subCard}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>新增 KR</div>
               <input
@@ -495,10 +591,6 @@ export default function App() {
               <button style={styles.button} onClick={() => addKR(o.id)} disabled={krDraft.saving}>
                 {krDraft.saving ? "新增中..." : "新增 KR"}
               </button>
-
-              <div style={{ marginTop: 8, color: "#6b7280", fontSize: 12 }}>
-                小提示：目标值建议填“可量化数字”（金额、次数、人效%、项目数），便于月度复盘对齐。
-              </div>
             </div>
           </div>
         );
@@ -518,7 +610,7 @@ const styles = {
     padding: 24,
   },
   container: {
-    maxWidth: 980,
+    maxWidth: 1060,
     margin: "40px auto",
     padding: 16,
   },
@@ -546,6 +638,15 @@ const styles = {
     border: "1px solid #d1d5db",
     marginBottom: 10,
     outline: "none",
+  },
+  titleInput: {
+    width: 520,
+    maxWidth: "80vw",
+    padding: "6px 8px",
+    borderRadius: 8,
+    border: "1px solid #d1d5db",
+    outline: "none",
+    fontWeight: 600,
   },
   inlineInput: {
     width: 140,
@@ -584,6 +685,14 @@ const styles = {
     cursor: "pointer",
     fontSize: 14,
   },
+  danger: {
+    padding: "8px 12px",
+    background: "#fff",
+    color: "#b91c1c",
+    border: "1px solid #fecaca",
+    borderRadius: 8,
+    cursor: "pointer",
+  },
   error: {
     color: "#b91c1c",
     background: "#fef2f2",
@@ -601,12 +710,19 @@ const styles = {
     background: "#fafafa",
   },
   krMeta: {
-    marginTop: 6,
+    marginTop: 8,
     fontSize: 13,
     color: "#374151",
     display: "flex",
     alignItems: "center",
     flexWrap: "wrap",
     gap: 6,
+  },
+  checkinRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 0",
+    borderBottom: "1px solid #eef2f7",
   },
 };
