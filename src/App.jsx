@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useLayoutEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -17,6 +17,9 @@ export default function App() {
 
   const [newOTitle, setNewOTitle] = useState("");
   const [newOError, setNewOError] = useState("");
+
+  // ✅ 页面切换：列表 / 关系树
+  const [page, setPage] = useState("list"); // "list" | "tree"
 
   // 当前正在编辑的 Objective
   const [editingOId, setEditingOId] = useState(null);
@@ -103,13 +106,22 @@ export default function App() {
       const next = { ...prev };
       for (const o of os) {
         if (!next[o.id])
-          next[o.id] = { title: "", target: "", current: "", error: "", saving: false };
+          next[o.id] = {
+            title: "",
+            target: "",
+            current: "",
+            error: "",
+            saving: false,
+          };
       }
       return next;
     });
 
     const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+      2,
+      "0"
+    )}`;
     setCheckinDrafts((prev) => {
       const next = { ...prev };
       for (const kr of krs) {
@@ -215,7 +227,8 @@ export default function App() {
 
   async function deleteItem(id, label) {
     setMenuOpenKey(null);
-    if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其复盘记录）`)) return;
+    if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其复盘记录）`))
+      return;
 
     const { error } = await supabase.from("okr_items").delete().eq("id", id);
     if (error) {
@@ -224,8 +237,6 @@ export default function App() {
     }
 
     if (editingOId === id) setEditingOId(null);
-
-    // 如果当前弹层打开的是被删 KR，则关闭弹层
     if (checkinModalKr?.kr?.id === id) setCheckinModalKr(null);
 
     await loadAll();
@@ -277,11 +288,20 @@ export default function App() {
 
     const { error } = await supabase.from("okr_items").insert(payload);
     if (error) {
-      setKRDraft(objectiveId, { saving: false, error: "新增 KR 失败：" + (error.message || "unknown") });
+      setKRDraft(objectiveId, {
+        saving: false,
+        error: "新增 KR 失败：" + (error.message || "unknown"),
+      });
       return;
     }
 
-    setKRDraft(objectiveId, { title: "", target: "", current: "", saving: false, error: "" });
+    setKRDraft(objectiveId, {
+      title: "",
+      target: "",
+      current: "",
+      saving: false,
+      error: "",
+    });
     await loadAll();
   }
 
@@ -349,20 +369,24 @@ export default function App() {
       created_by: session.user.id,
     };
 
-    // 同月覆盖（需要唯一索引 kr_id+month）
     const { error: insErr } = await supabase
       .from("okr_checkins")
       .upsert(payload, { onConflict: "kr_id,month" });
 
     if (insErr) {
-      setCheckinDraft(kr.id, { saving: false, error: "记录失败：" + (insErr.message || "unknown") });
+      setCheckinDraft(kr.id, {
+        saving: false,
+        error: "记录失败：" + (insErr.message || "unknown"),
+      });
       return;
     }
 
-    // 同步更新当前值（后续也可以升级为“自动累计”）
     const ok = await updateItem(kr.id, { current_value: valueNum });
     if (!ok) {
-      setCheckinDraft(kr.id, { saving: false, error: "复盘已记，但更新当前值失败" });
+      setCheckinDraft(kr.id, {
+        saving: false,
+        error: "复盘已记，但更新当前值失败",
+      });
       await loadAll();
       return;
     }
@@ -443,12 +467,7 @@ export default function App() {
     );
   }
 
-  function CheckinPanel({
-    kr,
-    isEditing,
-    history,
-    draft,
-  }) {
+  function CheckinPanel({ kr, isEditing, history, draft }) {
     return (
       <div>
         {isEditing ? (
@@ -460,7 +479,9 @@ export default function App() {
                   style={styles.input}
                   type="month"
                   value={draft.month}
-                  onChange={(e) => setCheckinDraft(kr.id, { month: e.target.value })}
+                  onChange={(e) =>
+                    setCheckinDraft(kr.id, { month: e.target.value })
+                  }
                 />
               </div>
               <div>
@@ -486,7 +507,11 @@ export default function App() {
 
             {draft.error ? <div style={styles.error}>{draft.error}</div> : null}
 
-            <button style={styles.button} onClick={() => addCheckin(kr)} disabled={draft.saving}>
+            <button
+              style={styles.button}
+              onClick={() => addCheckin(kr)}
+              disabled={draft.saving}
+            >
               {draft.saving ? "记录中..." : "记录本月复盘"}
             </button>
           </>
@@ -510,7 +535,9 @@ export default function App() {
                   <>
                     <span style={{ marginLeft: 8 }}>值：{h.value}</span>
                     {h.note ? (
-                      <span style={{ marginLeft: 10, color: "#6b7280" }}>备注：{h.note}</span>
+                      <span style={{ marginLeft: 10, color: "#6b7280" }}>
+                        备注：{h.note}
+                      </span>
                     ) : null}
                   </>
                 ) : (
@@ -556,6 +583,204 @@ export default function App() {
     );
   }
 
+  // ---------- Tree View (关系树) ----------
+  function TreeView({ objectives }) {
+    const wrapRef = useRef(null);
+    const [lines, setLines] = useState([]);
+
+    const nodeRefs = useRef(new Map()); // key -> element
+
+    const root = useMemo(() => {
+      // 你可以改成“2026年年度OKR”
+      return { id: "root", title: "26年年度OKR", type: "ROOT" };
+    }, []);
+
+    function setRef(key, el) {
+      if (!key) return;
+      if (el) nodeRefs.current.set(key, el);
+      else nodeRefs.current.delete(key);
+    }
+
+    function calcCenter(el) {
+      const r = el.getBoundingClientRect();
+      const wr = wrapRef.current.getBoundingClientRect();
+      return {
+        x: r.left - wr.left + r.width / 2,
+        y: r.top - wr.top + r.height / 2,
+        top: r.top - wr.top,
+        bottom: r.bottom - wr.top,
+      };
+    }
+
+    function recomputeLines() {
+      if (!wrapRef.current) return;
+      const newLines = [];
+
+      // root -> each O
+      for (const o of objectives) {
+        const rootEl = nodeRefs.current.get(`root`);
+        const oEl = nodeRefs.current.get(`o:${o.id}`);
+        if (!rootEl || !oEl) continue;
+
+        const a = calcCenter(rootEl);
+        const b = calcCenter(oEl);
+        newLines.push({
+          x1: a.x,
+          y1: a.bottom,
+          x2: b.x,
+          y2: b.top,
+        });
+
+        // O -> each KR
+        for (const kr of o.krs) {
+          const krEl = nodeRefs.current.get(`kr:${kr.id}`);
+          if (!krEl) continue;
+          const c = calcCenter(oEl);
+          const d = calcCenter(krEl);
+          newLines.push({
+            x1: c.x,
+            y1: c.bottom,
+            x2: d.x,
+            y2: d.top,
+          });
+        }
+      }
+
+      setLines(newLines);
+    }
+
+    useLayoutEffect(() => {
+      recomputeLines();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [objectives]);
+
+    useEffect(() => {
+      function onResize() {
+        recomputeLines();
+      }
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // 计算 root 的进度：可简单用所有 KR 平均进度（可按需改）
+    const allKrs = objectives.flatMap((o) => o.krs || []);
+    const rootProgress =
+      allKrs.length === 0
+        ? 0
+        : Math.round(
+            allKrs.reduce(
+              (acc, k) => acc + calcProgress(k.current_value, k.target_value),
+              0
+            ) / allKrs.length
+          );
+
+    return (
+      <div style={styles.treeOuter}>
+        <div style={styles.treeHint}>
+          提示：点击 KR 卡片可打开“复盘”弹层（查看/录入需先在列表页对该 O 点“修改”）。
+        </div>
+
+        <div ref={wrapRef} style={styles.treeWrap}>
+          {/* SVG 连线层 */}
+          <svg style={styles.treeSvg}>
+            {lines.map((ln, i) => (
+              <line
+                key={i}
+                x1={ln.x1}
+                y1={ln.y1}
+                x2={ln.x2}
+                y2={ln.y2}
+                stroke="#d1d5db"
+                strokeWidth="2"
+              />
+            ))}
+          </svg>
+
+          {/* Root */}
+          <div style={styles.treeLevel}>
+            <div
+              ref={(el) => setRef("root", el)}
+              style={{ ...styles.nodeCard, ...styles.nodeRoot }}
+            >
+              <div style={styles.nodeTitle}>{root.title}</div>
+              <div style={styles.nodeMeta}>
+                目标类型：公司
+                <span style={{ float: "right", fontWeight: 700 }}>{rootProgress}%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* O Level */}
+          <div style={{ ...styles.treeLevel, marginTop: 26 }}>
+            <div style={styles.treeRow}>
+              {objectives.map((o, idx) => {
+                const oProgress =
+                  o.krs?.length
+                    ? Math.round(
+                        o.krs.reduce(
+                          (acc, k) => acc + calcProgress(k.current_value, k.target_value),
+                          0
+                        ) / o.krs.length
+                      )
+                    : 0;
+
+                return (
+                  <div
+                    key={o.id}
+                    ref={(el) => setRef(`o:${o.id}`, el)}
+                    style={{ ...styles.nodeCard, minWidth: 260 }}
+                    title={o.title}
+                  >
+                    <div style={styles.nodeTitle}>{`O${idx + 1}`}</div>
+                    <div style={styles.nodeSub}>{o.title}</div>
+                    <div style={styles.nodeMeta}>
+                      目标类型：公司
+                      <span style={{ float: "right", fontWeight: 700 }}>
+                        {oProgress}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* KR Level: 每个 O 的 KR 一列 */}
+          <div style={{ ...styles.treeLevel, marginTop: 26 }}>
+            <div style={styles.treeRow}>
+              {objectives.map((o) => (
+                <div key={o.id} style={styles.krCol}>
+                  {(o.krs || []).map((k, kIdx) => {
+                    const p = calcProgress(k.current_value, k.target_value);
+                    return (
+                      <div
+                        key={k.id}
+                        ref={(el) => setRef(`kr:${k.id}`, el)}
+                        style={{ ...styles.nodeCard, cursor: "pointer" }}
+                        onClick={() => setCheckinModalKr({ kr: k, isEditing: false })}
+                        title="点击打开复盘"
+                      >
+                        <div style={styles.nodeTitle}>{`KR${kIdx + 1}`}</div>
+                        <div style={styles.nodeSub}>{k.title}</div>
+                        <div style={styles.nodeMeta}>
+                          <span style={{ color: "#6b7280" }}>
+                            {k.current_value ?? 0}/{k.target_value ?? "-"}
+                          </span>
+                          <span style={{ float: "right", fontWeight: 700 }}>{p}%</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // ---------- UI ----------
   if (!session) {
     return (
@@ -578,216 +803,265 @@ export default function App() {
   return (
     <div style={styles.container} ref={menuRootRef}>
       <div style={styles.header}>
-        <h2 style={{ margin: 0 }}>OKR（O → KR）</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <h2 style={{ margin: 0 }}>OKR（O → KR）</h2>
+
+          {/* ✅ 页面切换 */}
+          <div style={styles.tabs}>
+            <button
+              style={page === "list" ? styles.tabActive : styles.tab}
+              onClick={() => setPage("list")}
+            >
+              列表
+            </button>
+            <button
+              style={page === "tree" ? styles.tabActive : styles.tab}
+              onClick={() => setPage("tree")}
+            >
+              关系树
+            </button>
+          </div>
+        </div>
+
         <button style={styles.link} onClick={signOut}>
           退出
         </button>
       </div>
 
-      <div style={styles.card}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>新增 Objective</div>
-        <input
-          style={styles.input}
-          placeholder="例如：打造稳定可复制的电商增长引擎，实现高质量盈利"
-          value={newOTitle}
-          onChange={(e) => setNewOTitle(e.target.value)}
-        />
-        {newOError ? <div style={styles.error}>{newOError}</div> : null}
-        <button style={styles.button} onClick={addObjective} disabled={loading}>
-          {loading ? "处理中..." : "新增 O"}
-        </button>
-      </div>
+      {page === "tree" ? (
+        <TreeView objectives={objectives} />
+      ) : (
+        <>
+          <div style={styles.card}>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>新增 Objective</div>
+            <input
+              style={styles.input}
+              placeholder="例如：打造稳定可复制的电商增长引擎，实现高质量盈利"
+              value={newOTitle}
+              onChange={(e) => setNewOTitle(e.target.value)}
+            />
+            {newOError ? <div style={styles.error}>{newOError}</div> : null}
+            <button style={styles.button} onClick={addObjective} disabled={loading}>
+              {loading ? "处理中..." : "新增 O"}
+            </button>
+          </div>
 
-      {loading ? <div style={{ color: "#6b7280" }}>加载中...</div> : null}
+          {loading ? <div style={{ color: "#6b7280" }}>加载中...</div> : null}
 
-      {objectives.map((o, idx) => {
-        const isEditing = editingOId === o.id;
-        const krDraft =
-          krDrafts[o.id] || { title: "", target: "", current: "", error: "", saving: false };
+          {objectives.map((o, idx) => {
+            const isEditing = editingOId === o.id;
+            const krDraft =
+              krDrafts[o.id] || {
+                title: "",
+                target: "",
+                current: "",
+                error: "",
+                saving: false,
+              };
 
-        return (
-          <div key={o.id} style={styles.card}>
-            {/* O Header */}
-            <div style={styles.oHeader}>
-              <div style={{ fontWeight: 800, fontSize: 16 }}>
-                {`O${idx + 1}：`}
-                {isEditing ? (
-                  <input
-                    style={styles.titleInput}
-                    defaultValue={o.title}
-                    onBlur={(e) => updateTitle(o.id, e.target.value)}
-                  />
-                ) : (
-                  <span>{o.title}</span>
-                )}
-              </div>
-
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <button
-                  style={styles.secondary}
-                  onClick={() => {
-                    setMenuOpenKey(null);
-                    setEditingOId(isEditing ? null : o.id);
-                    // 如果从编辑切回只读，弹层还开着，也切回只读
-                    if (isEditing && checkinModalKr) {
-                      setCheckinModalKr({ ...checkinModalKr, isEditing: false });
-                    }
-                  }}
-                >
-                  {isEditing ? "完成" : "修改"}
-                </button>
-
-                {/* 更多：只在编辑模式显示 */}
-                {isEditing ? (
-                  <MoreMenu
-                    menuKey={`o:${o.id}`}
-                    items={[
-                      { label: "删除 O", danger: true, onClick: () => deleteItem(o.id, `O${idx + 1}`) },
-                    ]}
-                  />
-                ) : null}
-              </div>
-            </div>
-
-            {/* KR List */}
-            {o.krs.length ? (
-              <div style={{ marginTop: 12, marginBottom: 12 }}>
-                {o.krs.map((k, kIdx) => {
-                  const progress = calcProgress(k.current_value, k.target_value);
-
-                  return (
-                    <div key={k.id} style={styles.krRow}>
-                      <div style={styles.krHeader}>
-                        <div style={{ fontWeight: 800 }}>
-                          {`KR${kIdx + 1}：`}
-                          {isEditing ? (
-                            <input
-                              style={styles.titleInputSmall}
-                              defaultValue={k.title}
-                              onBlur={(e) => updateTitle(k.id, e.target.value)}
-                            />
-                          ) : (
-                            <span>{k.title}</span>
-                          )}
-                        </div>
-
-                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                          <div style={{ color: "#6b7280", fontSize: 12 }}>{`进度 ${progress}%`}</div>
-
-                          {/* ✅ 复盘按钮：打开弹层 */}
-                          <button
-                            style={styles.ghost}
-                            onClick={() => {
-                              setMenuOpenKey(null);
-                              setCheckinModalKr({ kr: k, isEditing });
-                            }}
-                          >
-                            复盘
-                          </button>
-
-                          {isEditing ? (
-                            <MoreMenu
-                              menuKey={`kr:${k.id}`}
-                              items={[
-                                {
-                                  label: "删除 KR",
-                                  danger: true,
-                                  onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
-                                },
-                              ]}
-                            />
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {/* Target/Current */}
-                      <div style={styles.krMeta}>
-                        <span>目标：</span>
-                        {isEditing ? (
-                          <input
-                            style={styles.inlineInput}
-                            type="number"
-                            defaultValue={k.target_value ?? 0}
-                            onBlur={(e) => updateKRTarget(k.id, e.target.value)}
-                          />
-                        ) : (
-                          <b>{k.target_value ?? "-"}</b>
-                        )}
-
-                        <span style={{ marginLeft: 10 }}>当前：</span>
-                        {isEditing ? (
-                          <input
-                            style={styles.inlineInput}
-                            type="number"
-                            defaultValue={k.current_value ?? 0}
-                            onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
-                          />
-                        ) : (
-                          <b>{k.current_value ?? 0}</b>
-                        )}
-
-                        {isEditing ? (
-                          <span style={{ marginLeft: 8, color: "#6b7280", fontSize: 12 }}>
-                            （改完点空白处自动保存）
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10, marginBottom: 12 }}>
-                还没有 KR，建议先拆 2–4 个可量化的关键结果。
-              </div>
-            )}
-
-            {/* 新增 KR：只在编辑模式显示 */}
-            {isEditing ? (
-              <div style={styles.subCard}>
-                <div style={{ fontWeight: 700, marginBottom: 8 }}>新增 KR</div>
-                <input
-                  style={styles.input}
-                  placeholder="KR 描述（必填）例如：内容电商 GSV ≥ 2600 万"
-                  value={krDraft.title}
-                  onChange={(e) => setKRDraft(o.id, { title: e.target.value })}
-                />
-
-                <div style={styles.grid2}>
-                  <div>
-                    <div style={styles.label}>目标值（必填）</div>
-                    <input
-                      style={styles.input}
-                      type="number"
-                      placeholder="例如：26000000"
-                      value={krDraft.target}
-                      onChange={(e) => setKRDraft(o.id, { target: e.target.value })}
-                    />
+            return (
+              <div key={o.id} style={styles.card}>
+                {/* O Header */}
+                <div style={styles.oHeader}>
+                  <div style={{ fontWeight: 800, fontSize: 16 }}>
+                    {`O${idx + 1}：`}
+                    {isEditing ? (
+                      <input
+                        style={styles.titleInput}
+                        defaultValue={o.title}
+                        onBlur={(e) => updateTitle(o.id, e.target.value)}
+                      />
+                    ) : (
+                      <span>{o.title}</span>
+                    )}
                   </div>
-                  <div>
-                    <div style={styles.label}>当前值（可选，默认 0）</div>
-                    <input
-                      style={styles.input}
-                      type="number"
-                      placeholder="例如：5000000"
-                      value={krDraft.current}
-                      onChange={(e) => setKRDraft(o.id, { current: e.target.value })}
-                    />
+
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <button
+                      style={styles.secondary}
+                      onClick={() => {
+                        setMenuOpenKey(null);
+                        setEditingOId(isEditing ? null : o.id);
+
+                        // 如果从编辑切回只读，弹层还开着，也切回只读
+                        if (isEditing && checkinModalKr) {
+                          setCheckinModalKr({ ...checkinModalKr, isEditing: false });
+                        }
+                      }}
+                    >
+                      {isEditing ? "完成" : "修改"}
+                    </button>
+
+                    {/* 更多：只在编辑模式显示 */}
+                    {isEditing ? (
+                      <MoreMenu
+                        menuKey={`o:${o.id}`}
+                        items={[
+                          {
+                            label: "删除 O",
+                            danger: true,
+                            onClick: () => deleteItem(o.id, `O${idx + 1}`),
+                          },
+                        ]}
+                      />
+                    ) : null}
                   </div>
                 </div>
 
-                {krDraft.error ? <div style={styles.error}>{krDraft.error}</div> : null}
+                {/* KR List */}
+                {o.krs.length ? (
+                  <div style={{ marginTop: 12, marginBottom: 12 }}>
+                    {o.krs.map((k, kIdx) => {
+                      const progress = calcProgress(k.current_value, k.target_value);
 
-                <button style={styles.button} onClick={() => addKR(o.id)} disabled={krDraft.saving}>
-                  {krDraft.saving ? "新增中..." : "新增 KR"}
-                </button>
+                      return (
+                        <div key={k.id} style={styles.krRow}>
+                          <div style={styles.krHeader}>
+                            <div style={{ fontWeight: 800 }}>
+                              {`KR${kIdx + 1}：`}
+                              {isEditing ? (
+                                <input
+                                  style={styles.titleInputSmall}
+                                  defaultValue={k.title}
+                                  onBlur={(e) => updateTitle(k.id, e.target.value)}
+                                />
+                              ) : (
+                                <span>{k.title}</span>
+                              )}
+                            </div>
+
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <div style={{ color: "#6b7280", fontSize: 12 }}>
+                                {`进度 ${progress}%`}
+                              </div>
+
+                              {/* 复盘按钮：打开弹层 */}
+                              <button
+                                style={styles.ghost}
+                                onClick={() => {
+                                  setMenuOpenKey(null);
+                                  setCheckinModalKr({ kr: k, isEditing });
+                                }}
+                              >
+                                复盘
+                              </button>
+
+                              {isEditing ? (
+                                <MoreMenu
+                                  menuKey={`kr:${k.id}`}
+                                  items={[
+                                    {
+                                      label: "删除 KR",
+                                      danger: true,
+                                      onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
+                                    },
+                                  ]}
+                                />
+                              ) : null}
+                            </div>
+                          </div>
+
+                          {/* Target/Current */}
+                          <div style={styles.krMeta}>
+                            <span>目标：</span>
+                            {isEditing ? (
+                              <input
+                                style={styles.inlineInput}
+                                type="number"
+                                defaultValue={k.target_value ?? 0}
+                                onBlur={(e) => updateKRTarget(k.id, e.target.value)}
+                              />
+                            ) : (
+                              <b>{k.target_value ?? "-"}</b>
+                            )}
+
+                            <span style={{ marginLeft: 10 }}>当前：</span>
+                            {isEditing ? (
+                              <input
+                                style={styles.inlineInput}
+                                type="number"
+                                defaultValue={k.current_value ?? 0}
+                                onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
+                              />
+                            ) : (
+                              <b>{k.current_value ?? 0}</b>
+                            )}
+
+                            {isEditing ? (
+                              <span style={{ marginLeft: 8, color: "#6b7280", fontSize: 12 }}>
+                                （改完点空白处自动保存）
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div
+                    style={{
+                      color: "#6b7280",
+                      fontSize: 13,
+                      marginTop: 10,
+                      marginBottom: 12,
+                    }}
+                  >
+                    还没有 KR，建议先拆 2–4 个可量化的关键结果。
+                  </div>
+                )}
+
+                {/* 新增 KR：只在编辑模式显示 */}
+                {isEditing ? (
+                  <div style={styles.subCard}>
+                    <div style={{ fontWeight: 700, marginBottom: 8 }}>新增 KR</div>
+                    <input
+                      style={styles.input}
+                      placeholder="KR 描述（必填）例如：内容电商 GSV ≥ 2600 万"
+                      value={krDraft.title}
+                      onChange={(e) => setKRDraft(o.id, { title: e.target.value })}
+                    />
+
+                    <div style={styles.grid2}>
+                      <div>
+                        <div style={styles.label}>目标值（必填）</div>
+                        <input
+                          style={styles.input}
+                          type="number"
+                          placeholder="例如：26000000"
+                          value={krDraft.target}
+                          onChange={(e) => setKRDraft(o.id, { target: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <div style={styles.label}>当前值（可选，默认 0）</div>
+                        <input
+                          style={styles.input}
+                          type="number"
+                          placeholder="例如：5000000"
+                          value={krDraft.current}
+                          onChange={(e) => setKRDraft(o.id, { current: e.target.value })}
+                        />
+                      </div>
+                    </div>
+
+                    {krDraft.error ? <div style={styles.error}>{krDraft.error}</div> : null}
+
+                    <button
+                      style={styles.button}
+                      onClick={() => addKR(o.id)}
+                      disabled={krDraft.saving}
+                    >
+                      {krDraft.saving ? "新增中..." : "新增 KR"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
-            ) : null}
-          </div>
-        );
-      })}
+            );
+          })}
+        </>
+      )}
 
-      {/* ✅ 复盘弹层（主页面不再直接显示复盘） */}
+      {/* ✅ 复盘弹层（列表页/树状页都可打开） */}
       <Modal
         open={!!checkinModalKr}
         title={checkinModalKr ? `月度复盘｜${checkinModalKr.kr.title}` : ""}
@@ -835,6 +1109,34 @@ const styles = {
     alignItems: "center",
     marginBottom: 18,
   },
+
+  tabs: {
+    display: "flex",
+    gap: 6,
+    padding: 4,
+    border: "1px solid #e5e7eb",
+    borderRadius: 12,
+    background: "#fff",
+  },
+  tab: {
+    padding: "8px 12px",
+    borderRadius: 10,
+    border: "none",
+    background: "transparent",
+    cursor: "pointer",
+    fontWeight: 700,
+    color: "#374151",
+  },
+  tabActive: {
+    padding: "8px 12px",
+    borderRadius: 10,
+    border: "1px solid #e5e7eb",
+    background: "#f3f4f6",
+    cursor: "pointer",
+    fontWeight: 800,
+    color: "#111827",
+  },
+
   card: {
     border: "1px solid #e5e7eb",
     borderRadius: 12,
@@ -1059,5 +1361,83 @@ const styles = {
     cursor: "pointer",
     fontSize: 16,
     lineHeight: "1",
+  },
+
+  // Tree
+  treeOuter: {
+    border: "1px solid #e5e7eb",
+    borderRadius: 12,
+    background: "#fff",
+    padding: 14,
+  },
+  treeHint: {
+    color: "#6b7280",
+    fontSize: 12,
+    marginBottom: 10,
+  },
+  treeWrap: {
+    position: "relative",
+    overflowX: "auto",
+    padding: 20,
+    borderRadius: 12,
+    background: "#fafafa",
+    border: "1px solid #eef2f7",
+  },
+  treeSvg: {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    pointerEvents: "none",
+  },
+  treeLevel: {
+    position: "relative",
+    display: "flex",
+    justifyContent: "center",
+    zIndex: 1,
+  },
+  treeRow: {
+    display: "flex",
+    gap: 24,
+    justifyContent: "center",
+    alignItems: "flex-start",
+    flexWrap: "nowrap",
+  },
+  krCol: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 14,
+    minWidth: 260,
+  },
+  nodeCard: {
+    width: 260,
+    borderRadius: 12,
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    padding: 14,
+    boxShadow: "0 10px 25px rgba(0,0,0,0.06)",
+  },
+  nodeRoot: {
+    width: 320,
+  },
+  nodeTitle: {
+    fontWeight: 900,
+    fontSize: 16,
+    marginBottom: 6,
+  },
+  nodeSub: {
+    color: "#374151",
+    fontSize: 13,
+    marginBottom: 10,
+    lineHeight: 1.35,
+    maxHeight: 40,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  nodeMeta: {
+    color: "#6b7280",
+    fontSize: 12,
+    borderTop: "1px solid #eef2f7",
+    paddingTop: 10,
   },
 };
