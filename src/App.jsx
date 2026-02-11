@@ -173,17 +173,25 @@ export default function App() {
 
     setKRDraft(objectiveId, { error: "", saving: true });
 
-    const payload = {
-      id: crypto.randomUUID(),
-      title,
-      type: "KR",
-      parent_id: objectiveId,
-      target_value: target,
-      current_value: current,
-      owner_id: session.user.id,
-      owner_email: session.user.email,
-      owner_name: session.user.email,
-    };
+    const parentO = objectives.find((x) => x.id === objectiveId);
+
+const payload = {
+  id: crypto.randomUUID(),
+  title,
+  type: "KR",
+  parent_id: objectiveId,
+
+  // ✅ 关键：补齐数据库 NOT NULL 字段，并继承父 O
+  level: parentO?.level || "company",
+  department: parentO?.department || "company",
+
+  target_value: target,
+  current_value: current,
+  owner_id: session.user.id,
+  owner_email: session.user.email,
+  owner_name: session.user.email,
+};
+
 
     const { error } = await supabase.from("okr_items").insert(payload);
 
