@@ -30,6 +30,9 @@ export default function App() {
   // ✅ 统一的“更多菜单”状态：{ key: string | null }
   // key 形如：o:<oid> / kr:<krid> / ck:<checkinid>
   const [menuOpenKey, setMenuOpenKey] = useState(null);
+  // ✅ 复盘弹层：当前打开的 KR
+const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing } or null
+
   const menuRootRef = useRef(null);
 
   // 点击空白关闭菜单
