@@ -18,7 +18,7 @@ export default function App() {
   const [newOTitle, setNewOTitle] = useState("");
   const [newOError, setNewOError] = useState("");
 
-  // ✅ 当前正在编辑的 Objective
+  // 当前正在编辑的 Objective
   const [editingOId, setEditingOId] = useState(null);
 
   // 每个 O 独立的 KR 草稿
@@ -27,12 +27,11 @@ export default function App() {
   // 每个 KR 独立的月度复盘草稿
   const [checkinDrafts, setCheckinDrafts] = useState({});
 
-  // ✅ 统一的“更多菜单”状态：{ key: string | null }
-  // key 形如：o:<oid> / kr:<krid> / ck:<checkinid>
-  const [menuOpenKey, setMenuOpenKey] = useState(null);
   // ✅ 复盘弹层：当前打开的 KR
-const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing } or null
+  const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing } | null
 
+  // 统一的“更多菜单”状态：o:<oid> / kr:<krid> / ck:<checkinid>
+  const [menuOpenKey, setMenuOpenKey] = useState(null);
   const menuRootRef = useRef(null);
 
   // 点击空白关闭菜单
@@ -69,8 +68,14 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
 
     const [{ data: items, error: itemsErr }, { data: cks, error: cksErr }] =
       await Promise.all([
-        supabase.from("okr_items").select("*").order("created_at", { ascending: true }),
-        supabase.from("okr_checkins").select("*").order("created_at", { ascending: true }),
+        supabase
+          .from("okr_items")
+          .select("*")
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("okr_checkins")
+          .select("*")
+          .order("created_at", { ascending: true }),
       ]);
 
     setLoading(false);
@@ -97,7 +102,8 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
     setKrDrafts((prev) => {
       const next = { ...prev };
       for (const o of os) {
-        if (!next[o.id]) next[o.id] = { title: "", target: "", current: "", error: "", saving: false };
+        if (!next[o.id])
+          next[o.id] = { title: "", target: "", current: "", error: "", saving: false };
       }
       return next;
     });
@@ -107,7 +113,8 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
     setCheckinDrafts((prev) => {
       const next = { ...prev };
       for (const kr of krs) {
-        if (!next[kr.id]) next[kr.id] = { month: ym, value: "", note: "", saving: false, error: "" };
+        if (!next[kr.id])
+          next[kr.id] = { month: ym, value: "", note: "", saving: false, error: "" };
       }
       return next;
     });
@@ -209,13 +216,18 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
   async function deleteItem(id, label) {
     setMenuOpenKey(null);
     if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其复盘记录）`)) return;
+
     const { error } = await supabase.from("okr_items").delete().eq("id", id);
     if (error) {
       alert("删除失败：" + (error.message || "unknown error"));
       return;
     }
-    // 删除 O 后，如果正在编辑它，就退出编辑态
+
     if (editingOId === id) setEditingOId(null);
+
+    // 如果当前弹层打开的是被删 KR，则关闭弹层
+    if (checkinModalKr?.kr?.id === id) setCheckinModalKr(null);
+
     await loadAll();
   }
 
@@ -297,7 +309,7 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
     const title = (raw || "").trim();
     if (!title) {
       alert("标题不能为空");
-      await loadAll(); // 回滚显示
+      await loadAll();
       return;
     }
     const ok = await updateItem(id, { title });
@@ -337,7 +349,7 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
       created_by: session.user.id,
     };
 
-    // ✅ upsert：同月覆盖
+    // 同月覆盖（需要唯一索引 kr_id+month）
     const { error: insErr } = await supabase
       .from("okr_checkins")
       .upsert(payload, { onConflict: "kr_id,month" });
@@ -347,7 +359,7 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
       return;
     }
 
-    // 同步更新当前值（你后面也可以改成“自动累计”，我们再升级）
+    // 同步更新当前值（后续也可以升级为“自动累计”）
     const ok = await updateItem(kr.id, { current_value: valueNum });
     if (!ok) {
       setCheckinDraft(kr.id, { saving: false, error: "复盘已记，但更新当前值失败" });
@@ -405,6 +417,145 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
     );
   }
 
+  function Modal({ title, open, onClose, children }) {
+    useEffect(() => {
+      function onKey(e) {
+        if (e.key === "Escape") onClose?.();
+      }
+      if (open) document.addEventListener("keydown", onKey);
+      return () => document.removeEventListener("keydown", onKey);
+    }, [open, onClose]);
+
+    if (!open) return null;
+
+    return (
+      <div style={styles.modalMask} onMouseDown={onClose}>
+        <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
+          <div style={styles.modalHeader}>
+            <div style={{ fontWeight: 800 }}>{title}</div>
+            <button style={styles.modalClose} onClick={onClose} title="关闭">
+              ✕
+            </button>
+          </div>
+          <div style={styles.modalBody}>{children}</div>
+        </div>
+      </div>
+    );
+  }
+
+  function CheckinPanel({
+    kr,
+    isEditing,
+    history,
+    draft,
+  }) {
+    return (
+      <div>
+        {isEditing ? (
+          <>
+            <div style={styles.grid3}>
+              <div>
+                <div style={styles.label}>月份</div>
+                <input
+                  style={styles.input}
+                  type="month"
+                  value={draft.month}
+                  onChange={(e) => setCheckinDraft(kr.id, { month: e.target.value })}
+                />
+              </div>
+              <div>
+                <div style={styles.label}>本月实际值</div>
+                <input
+                  style={styles.input}
+                  type="number"
+                  placeholder="例如：5000000"
+                  value={draft.value}
+                  onChange={(e) => setCheckinDraft(kr.id, { value: e.target.value })}
+                />
+              </div>
+              <div>
+                <div style={styles.label}>备注（可选）</div>
+                <input
+                  style={styles.input}
+                  placeholder="例如：本月投放加码，ROI 提升"
+                  value={draft.note}
+                  onChange={(e) => setCheckinDraft(kr.id, { note: e.target.value })}
+                />
+              </div>
+            </div>
+
+            {draft.error ? <div style={styles.error}>{draft.error}</div> : null}
+
+            <button style={styles.button} onClick={() => addCheckin(kr)} disabled={draft.saving}>
+              {draft.saving ? "记录中..." : "记录本月复盘"}
+            </button>
+          </>
+        ) : (
+          <div style={{ color: "#6b7280", fontSize: 12 }}>
+            只读模式：如需录入/编辑复盘，请先在该 O 右上角点击「修改」进入编辑模式。
+          </div>
+        )}
+
+        <div style={{ marginTop: 14, color: "#6b7280", fontSize: 12 }}>历史复盘：</div>
+
+        {history.length ? (
+          <div style={{ marginTop: 8 }}>
+            {history.map((h) => (
+              <div key={h.id} style={styles.checkinRow}>
+                <b style={{ width: 80, display: "inline-block" }}>
+                  {String(h.month).slice(0, 7)}
+                </b>
+
+                {!isEditing ? (
+                  <>
+                    <span style={{ marginLeft: 8 }}>值：{h.value}</span>
+                    {h.note ? (
+                      <span style={{ marginLeft: 10, color: "#6b7280" }}>备注：{h.note}</span>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    <span style={{ marginLeft: 8 }}>值：</span>
+                    <input
+                      style={styles.inlineInput}
+                      type="number"
+                      defaultValue={h.value}
+                      onBlur={async (e) => {
+                        const n = safeNumber(e.target.value);
+                        if (!Number.isFinite(n) || n < 0) return alert("复盘值必须 ≥ 0");
+                        const ok = await updateCheckin(h.id, { value: n });
+                        if (ok) await loadAll();
+                      }}
+                    />
+
+                    <span style={{ marginLeft: 8 }}>备注：</span>
+                    <input
+                      style={{ ...styles.inlineInput, width: 320 }}
+                      defaultValue={h.note || ""}
+                      onBlur={async (e) => {
+                        const ok = await updateCheckin(h.id, { note: e.target.value });
+                        if (ok) await loadAll();
+                      }}
+                    />
+
+                    <MoreMenu
+                      menuKey={`ck:${h.id}`}
+                      items={[
+                        { label: "删除复盘", danger: true, onClick: () => deleteCheckin(h.id) },
+                      ]}
+                    />
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>暂无复盘记录</div>
+        )}
+      </div>
+    );
+  }
+
   // ---------- UI ----------
   if (!session) {
     return (
@@ -428,7 +579,9 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
     <div style={styles.container} ref={menuRootRef}>
       <div style={styles.header}>
         <h2 style={{ margin: 0 }}>OKR（O → KR）</h2>
-        <button style={styles.link} onClick={signOut}>退出</button>
+        <button style={styles.link} onClick={signOut}>
+          退出
+        </button>
       </div>
 
       <div style={styles.card}>
@@ -449,7 +602,8 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
 
       {objectives.map((o, idx) => {
         const isEditing = editingOId === o.id;
-        const krDraft = krDrafts[o.id] || { title: "", target: "", current: "", error: "", saving: false };
+        const krDraft =
+          krDrafts[o.id] || { title: "", target: "", current: "", error: "", saving: false };
 
         return (
           <div key={o.id} style={styles.card}>
@@ -474,21 +628,21 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
                   onClick={() => {
                     setMenuOpenKey(null);
                     setEditingOId(isEditing ? null : o.id);
+                    // 如果从编辑切回只读，弹层还开着，也切回只读
+                    if (isEditing && checkinModalKr) {
+                      setCheckinModalKr({ ...checkinModalKr, isEditing: false });
+                    }
                   }}
                 >
                   {isEditing ? "完成" : "修改"}
                 </button>
 
-                {/* ✅ 更多：只在编辑模式显示 */}
+                {/* 更多：只在编辑模式显示 */}
                 {isEditing ? (
                   <MoreMenu
                     menuKey={`o:${o.id}`}
                     items={[
-                      {
-                        label: "删除 O",
-                        danger: true,
-                        onClick: () => deleteItem(o.id, `O${idx + 1}`),
-                      },
+                      { label: "删除 O", danger: true, onClick: () => deleteItem(o.id, `O${idx + 1}`) },
                     ]}
                   />
                 ) : null}
@@ -500,8 +654,6 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
               <div style={{ marginTop: 12, marginBottom: 12 }}>
                 {o.krs.map((k, kIdx) => {
                   const progress = calcProgress(k.current_value, k.target_value);
-                  const history = (checkinsByKr[k.id] || []).slice().reverse();
-                  const d = checkinDrafts[k.id] || { month: "", value: "", note: "", saving: false, error: "" };
 
                   return (
                     <div key={k.id} style={styles.krRow}>
@@ -521,6 +673,17 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
 
                         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                           <div style={{ color: "#6b7280", fontSize: 12 }}>{`进度 ${progress}%`}</div>
+
+                          {/* ✅ 复盘按钮：打开弹层 */}
+                          <button
+                            style={styles.ghost}
+                            onClick={() => {
+                              setMenuOpenKey(null);
+                              setCheckinModalKr({ kr: k, isEditing });
+                            }}
+                          >
+                            复盘
+                          </button>
 
                           {isEditing ? (
                             <MoreMenu
@@ -568,124 +731,6 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
                             （改完点空白处自动保存）
                           </span>
                         ) : null}
-                      </div>
-
-                      {/* Check-in */}
-                      <div style={styles.subCard}>
-                        <div style={{ fontWeight: 700, marginBottom: 8 }}>月度复盘（Check-in）</div>
-
-                        {/* 复盘录入：只有编辑模式允许录入 */}
-                        {isEditing ? (
-                          <>
-                            <div style={styles.grid3}>
-                              <div>
-                                <div style={styles.label}>月份</div>
-                                <input
-                                  style={styles.input}
-                                  type="month"
-                                  value={d.month}
-                                  onChange={(e) => setCheckinDraft(k.id, { month: e.target.value })}
-                                />
-                              </div>
-                              <div>
-                                <div style={styles.label}>本月实际值</div>
-                                <input
-                                  style={styles.input}
-                                  type="number"
-                                  placeholder="例如：5000000"
-                                  value={d.value}
-                                  onChange={(e) => setCheckinDraft(k.id, { value: e.target.value })}
-                                />
-                              </div>
-                              <div>
-                                <div style={styles.label}>备注（可选）</div>
-                                <input
-                                  style={styles.input}
-                                  placeholder="例如：本月投放加码，ROI 提升"
-                                  value={d.note}
-                                  onChange={(e) => setCheckinDraft(k.id, { note: e.target.value })}
-                                />
-                              </div>
-                            </div>
-
-                            {d.error ? <div style={styles.error}>{d.error}</div> : null}
-
-                            <button style={styles.button} onClick={() => addCheckin(k)} disabled={d.saving}>
-                              {d.saving ? "记录中..." : "记录本月复盘"}
-                            </button>
-                          </>
-                        ) : (
-                          <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 8 }}>
-                            只读模式：如需录入/编辑复盘，请在 O 右上角点击「修改」进入编辑模式。
-                          </div>
-                        )}
-
-                        <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
-                          历史复盘：
-                        </div>
-
-                        {history.length ? (
-                          <div style={{ marginTop: 6, fontSize: 13 }}>
-                            {history.map((h) => (
-                              <div key={h.id} style={styles.checkinRow}>
-                                <b style={{ width: 80, display: "inline-block" }}>
-                                  {String(h.month).slice(0, 7)}
-                                </b>
-
-                                {!isEditing ? (
-                                  <>
-                                    <span style={{ marginLeft: 8 }}>值：{h.value}</span>
-                                    {h.note ? (
-                                      <span style={{ marginLeft: 10, color: "#6b7280" }}>
-                                        备注：{h.note}
-                                      </span>
-                                    ) : null}
-                                  </>
-                                ) : (
-                                  <>
-                                    <span style={{ marginLeft: 8 }}>值：</span>
-                                    <input
-                                      style={styles.inlineInput}
-                                      type="number"
-                                      defaultValue={h.value}
-                                      onBlur={async (e) => {
-                                        const n = safeNumber(e.target.value);
-                                        if (!Number.isFinite(n) || n < 0) return alert("复盘值必须 ≥ 0");
-                                        const ok = await updateCheckin(h.id, { value: n });
-                                        if (ok) await loadAll();
-                                      }}
-                                    />
-
-                                    <span style={{ marginLeft: 8 }}>备注：</span>
-                                    <input
-                                      style={{ ...styles.inlineInput, width: 260 }}
-                                      defaultValue={h.note || ""}
-                                      onBlur={async (e) => {
-                                        const ok = await updateCheckin(h.id, { note: e.target.value });
-                                        if (ok) await loadAll();
-                                      }}
-                                    />
-
-                                    <MoreMenu
-                                      menuKey={`ck:${h.id}`}
-                                      items={[
-                                        {
-                                          label: "删除复盘",
-                                          danger: true,
-                                          onClick: () => deleteCheckin(h.id),
-                                        },
-                                      ]}
-                                    />
-                                  </>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div style={{ marginTop: 6, fontSize: 13, color: "#6b7280" }}>
-                            暂无复盘记录
-                          </div>
-                        )}
                       </div>
                     </div>
                   );
@@ -741,6 +786,30 @@ const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing }
           </div>
         );
       })}
+
+      {/* ✅ 复盘弹层（主页面不再直接显示复盘） */}
+      <Modal
+        open={!!checkinModalKr}
+        title={checkinModalKr ? `月度复盘｜${checkinModalKr.kr.title}` : ""}
+        onClose={() => setCheckinModalKr(null)}
+      >
+        {checkinModalKr ? (
+          <CheckinPanel
+            kr={checkinModalKr.kr}
+            isEditing={checkinModalKr.isEditing}
+            history={(checkinsByKr[checkinModalKr.kr.id] || []).slice().reverse()}
+            draft={
+              checkinDrafts[checkinModalKr.kr.id] || {
+                month: "",
+                value: "",
+                note: "",
+                saving: false,
+                error: "",
+              }
+            }
+          />
+        ) : null}
+      </Modal>
     </div>
   );
 }
@@ -845,6 +914,15 @@ const styles = {
     cursor: "pointer",
     fontWeight: 600,
   },
+  ghost: {
+    padding: "8px 10px",
+    background: "#fff",
+    color: "#111827",
+    border: "1px solid #e5e7eb",
+    borderRadius: 10,
+    cursor: "pointer",
+    fontWeight: 700,
+  },
   link: {
     background: "none",
     border: "none",
@@ -893,7 +971,7 @@ const styles = {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    padding: "8px 0",
+    padding: "10px 0",
     borderBottom: "1px solid #eef2f7",
   },
 
@@ -940,5 +1018,46 @@ const styles = {
     cursor: "pointer",
     fontSize: 14,
     color: "#b91c1c",
+  },
+
+  // Modal
+  modalMask: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.35)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 50,
+  },
+  modal: {
+    width: "min(980px, 96vw)",
+    maxHeight: "86vh",
+    overflow: "auto",
+    background: "#fff",
+    borderRadius: 14,
+    border: "1px solid #e5e7eb",
+    boxShadow: "0 20px 50px rgba(0,0,0,0.18)",
+  },
+  modalHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "14px 14px 10px 14px",
+    borderBottom: "1px solid #eef2f7",
+  },
+  modalBody: {
+    padding: 14,
+  },
+  modalClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    cursor: "pointer",
+    fontSize: 16,
+    lineHeight: "1",
   },
 };
