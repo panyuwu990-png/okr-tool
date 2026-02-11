@@ -6,14 +6,6 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-/**
- * UX 改进点：
- * 1) 每个 Objective 拥有独立 KR 表单状态（krDrafts[o.id]）
- * 2) 校验失败给出明确提示，不再“无声失败”
- * 3) 提交中按钮禁用 + 文案变化
- * 4) 数值字段做安全 parse（空=0；NaN=提示）
- */
-
 export default function App() {
   const [session, setSession] = useState(null);
   const [email, setEmail] = useState("");
@@ -21,11 +13,16 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
+  const [checkins, setCheckins] = useState([]); // okr_checkins 全量（量不大时最省事）
   const [newOTitle, setNewOTitle] = useState("");
   const [newOError, setNewOError] = useState("");
 
-  // 每个 O 的 KR 草稿：{ [objectiveId]: { title, target, current, error, saving } }
+  // 每个 O 独立的 KR 草稿
   const [krDrafts, setKrDrafts] = useState({});
+
+  // 每个 KR 独立的“月度复盘草稿”
+  // { [krId]: { month:'YYYY-MM', value:'', note:'', saving:false, error:'' } }
+  const [checkinDrafts, setCheckinDrafts] = useState({});
 
   // ---------- Auth ----------
   useEffect(() => {
@@ -46,29 +43,49 @@ export default function App() {
 
   async function loadAll() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("okr_items")
-      .select("*")
-      .order("created_at", { ascending: true });
 
-    if (error) {
-      alert("加载 OKR 数据失败：" + (error.message || "unknown error"));
-      setRows([]);
-      setLoading(false);
-      return;
-    }
+    const [{ data: items, error: itemsErr }, { data: cks, error: cksErr }] =
+      await Promise.all([
+        supabase.from("okr_items").select("*").order("created_at", { ascending: true }),
+        supabase.from("okr_checkins").select("*").order("created_at", { ascending: true }),
+      ]);
 
-    setRows(data || []);
     setLoading(false);
 
-    // 初始化每个 O 的 KR 草稿（避免 undefined）
-    const os = (data || []).filter((i) => i.type === "O");
+    if (itemsErr) {
+      alert("加载 okr_items 失败：" + (itemsErr.message || "unknown error"));
+      setRows([]);
+      return;
+    }
+    if (cksErr) {
+      // 复盘表如果还没建，会在这里报错：提醒你先跑 SQL
+      alert("加载 okr_checkins 失败（请确认已创建表）： " + (cksErr.message || "unknown error"));
+      setCheckins([]);
+    } else {
+      setCheckins(cks || []);
+    }
+
+    const data = items || [];
+    setRows(data);
+
+    // 初始化每个 O 的 KR 草稿
+    const os = data.filter((i) => i.type === "O");
     setKrDrafts((prev) => {
       const next = { ...prev };
       for (const o of os) {
-        if (!next[o.id]) {
-          next[o.id] = { title: "", target: "", current: "", error: "", saving: false };
-        }
+        if (!next[o.id]) next[o.id] = { title: "", target: "", current: "", error: "", saving: false };
+      }
+      return next;
+    });
+
+    // 初始化每个 KR 的复盘草稿（默认本月）
+    const krs = data.filter((i) => i.type === "KR");
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    setCheckinDrafts((prev) => {
+      const next = { ...prev };
+      for (const kr of krs) {
+        if (!next[kr.id]) next[kr.id] = { month: ym, value: "", note: "", saving: false, error: "" };
       }
       return next;
     });
@@ -83,9 +100,17 @@ export default function App() {
     }));
   }, [rows]);
 
+  const checkinsByKr = useMemo(() => {
+    const map = {};
+    for (const c of checkins) {
+      if (!map[c.kr_id]) map[c.kr_id] = [];
+      map[c.kr_id].push(c);
+    }
+    return map;
+  }, [checkins]);
+
   // ---------- Helpers ----------
   function safeNumber(input) {
-    // 允许空字符串 => 0（对当前值更友好）
     if (input === "" || input === null || input === undefined) return 0;
     const n = Number(input);
     return Number.isFinite(n) ? n : NaN;
@@ -97,10 +122,16 @@ export default function App() {
     if (!Number.isFinite(t) || t <= 0) return 0;
     if (!Number.isFinite(c) || c <= 0) return 0;
     const p = Math.round((c / t) * 100);
-    return Math.max(0, Math.min(999, p)); // 防止极端值
+    return Math.max(0, Math.min(999, p));
   }
 
-  // ---------- Actions ----------
+  function ymToFirstDay(ym) {
+    // '2026-01' => '2026-01-01'
+    if (!ym || ym.length < 7) return null;
+    return `${ym}-01`;
+  }
+
+  // ---------- Auth Actions ----------
   async function signIn() {
     if (!email.trim()) return alert("请输入邮箱");
     setAuthSending(true);
@@ -115,6 +146,7 @@ export default function App() {
     await supabase.auth.signOut();
   }
 
+  // ---------- OKR Actions ----------
   async function addObjective() {
     const title = newOTitle.trim();
     if (!title) {
@@ -157,9 +189,8 @@ export default function App() {
     const target = safeNumber(draft.target);
     const current = safeNumber(draft.current);
 
-    // 校验：描述必填，目标值必填且为正数
     if (!title) {
-      setKRDraft(objectiveId, { error: "请填写 KR 描述（例如：内容电商 GSV ≥ 2600 万）" });
+      setKRDraft(objectiveId, { error: "请填写 KR 描述" });
       return;
     }
     if (!Number.isFinite(target) || target <= 0) {
@@ -171,27 +202,26 @@ export default function App() {
       return;
     }
 
-    setKRDraft(objectiveId, { error: "", saving: true });
-
     const parentO = objectives.find((x) => x.id === objectiveId);
 
-const payload = {
-  id: crypto.randomUUID(),
-  title,
-  type: "KR",
-  parent_id: objectiveId,
+    setKRDraft(objectiveId, { error: "", saving: true });
 
-  // ✅ 关键：补齐数据库 NOT NULL 字段，并继承父 O
-  level: parentO?.level || "company",
-  department: parentO?.department || "company",
+    const payload = {
+      id: crypto.randomUUID(),
+      title,
+      type: "KR",
+      parent_id: objectiveId,
 
-  target_value: target,
-  current_value: current,
-  owner_id: session.user.id,
-  owner_email: session.user.email,
-  owner_name: session.user.email,
-};
+      // ✅ 继承父 O，避免 NOT NULL 报错
+      level: parentO?.level || "company",
+      department: parentO?.department || "company",
 
+      target_value: target,
+      current_value: current,
+      owner_id: session.user.id,
+      owner_email: session.user.email,
+      owner_name: session.user.email,
+    };
 
     const { error } = await supabase.from("okr_items").insert(payload);
 
@@ -200,12 +230,11 @@ const payload = {
       return;
     }
 
-    // 成功后清空该 O 的草稿
     setKRDraft(objectiveId, { title: "", target: "", current: "", saving: false, error: "" });
     await loadAll();
   }
 
-  // 可选：允许快速更新 KR 当前值（用于月度复盘）
+  // 直接更新 KR 当前值（你现在已有）
   async function updateKRCurrent(krId, newCurrentRaw) {
     const n = safeNumber(newCurrentRaw);
     if (!Number.isFinite(n) || n < 0) {
@@ -214,6 +243,64 @@ const payload = {
     }
     const { error } = await supabase.from("okr_items").update({ current_value: n }).eq("id", krId);
     if (error) return alert("更新失败：" + (error.message || "unknown error"));
+    await loadAll();
+  }
+
+  // ---------- Check-in Actions（新增） ----------
+  function setCheckinDraft(krId, patch) {
+    setCheckinDrafts((prev) => ({
+      ...prev,
+      [krId]: { ...(prev[krId] || {}), ...patch },
+    }));
+  }
+
+  async function addCheckin(kr) {
+    const d = checkinDrafts[kr.id] || { month: "", value: "", note: "" };
+    const monthFirstDay = ymToFirstDay(d.month);
+    const valueNum = safeNumber(d.value);
+
+    if (!monthFirstDay) {
+      setCheckinDraft(kr.id, { error: "请选择月份（例如：2026-01）" });
+      return;
+    }
+    if (!Number.isFinite(valueNum) || valueNum < 0) {
+      setCheckinDraft(kr.id, { error: "复盘值必须是 ≥ 0 的数字" });
+      return;
+    }
+
+    setCheckinDraft(kr.id, { saving: true, error: "" });
+
+    // 1) 写入复盘记录
+    const payload = {
+      id: crypto.randomUUID(),
+      kr_id: kr.id,
+      month: monthFirstDay,
+      value: valueNum,
+      note: (d.note || "").trim(),
+      created_by: session.user.id,
+    };
+
+    const { error: insErr } = await supabase.from("okr_checkins").insert(payload);
+    if (insErr) {
+      setCheckinDraft(kr.id, { saving: false, error: "记录失败：" + (insErr.message || "unknown") });
+      return;
+    }
+
+    // 2) 同步更新 kr 当前值（让进度实时变化）
+    const { error: updErr } = await supabase
+      .from("okr_items")
+      .update({ current_value: valueNum })
+      .eq("id", kr.id);
+
+    if (updErr) {
+      // 复盘记录已成功，但 current_value 更新失败
+      setCheckinDraft(kr.id, { saving: false, error: "复盘已记，但更新当前值失败：" + (updErr.message || "unknown") });
+      await loadAll();
+      return;
+    }
+
+    // 成功后清空 value/note，保留月份
+    setCheckinDraft(kr.id, { value: "", note: "", saving: false, error: "" });
     await loadAll();
   }
 
@@ -260,7 +347,7 @@ const payload = {
       {loading ? <div style={{ color: "#6b7280" }}>加载中...</div> : null}
 
       {objectives.map((o, idx) => {
-        const draft = krDrafts[o.id] || { title: "", target: "", current: "", error: "", saving: false };
+        const krDraft = krDrafts[o.id] || { title: "", target: "", current: "", error: "", saving: false };
 
         return (
           <div key={o.id} style={styles.card}>
@@ -273,10 +360,14 @@ const payload = {
               <div style={{ marginBottom: 12 }}>
                 {o.krs.map((k, kIdx) => {
                   const progress = calcProgress(k.current_value, k.target_value);
+                  const history = checkinsByKr[k.id] || [];
+
+                  const d = checkinDrafts[k.id] || { month: "", value: "", note: "", saving: false, error: "" };
+
                   return (
                     <div key={k.id} style={styles.krRow}>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                        <div style={{ fontWeight: 600 }}>{`KR${kIdx + 1}：${k.title}`}</div>
+                        <div style={{ fontWeight: 700 }}>{`KR${kIdx + 1}：${k.title}`}</div>
                         <div style={{ color: "#6b7280", fontSize: 12 }}>{`进度 ${progress}%`}</div>
                       </div>
 
@@ -293,6 +384,69 @@ const payload = {
                           （改完点空白处自动保存）
                         </span>
                       </div>
+
+                      {/* ✅ 月度复盘（新增） */}
+                      <div style={styles.subCard}>
+                        <div style={{ fontWeight: 600, marginBottom: 8 }}>月度复盘（Check-in）</div>
+
+                        <div style={styles.grid3}>
+                          <div>
+                            <div style={styles.label}>月份</div>
+                            <input
+                              style={styles.input}
+                              type="month"
+                              value={d.month}
+                              onChange={(e) => setCheckinDraft(k.id, { month: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <div style={styles.label}>本月实际值</div>
+                            <input
+                              style={styles.input}
+                              type="number"
+                              placeholder="例如：5000000"
+                              value={d.value}
+                              onChange={(e) => setCheckinDraft(k.id, { value: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <div style={styles.label}>备注（可选）</div>
+                            <input
+                              style={styles.input}
+                              placeholder="例如：本月投放加码，ROI 提升"
+                              value={d.note}
+                              onChange={(e) => setCheckinDraft(k.id, { note: e.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                        {d.error ? <div style={styles.error}>{d.error}</div> : null}
+
+                        <button
+                          style={styles.button}
+                          onClick={() => addCheckin(k)}
+                          disabled={d.saving}
+                        >
+                          {d.saving ? "记录中..." : "记录本月复盘"}
+                        </button>
+
+                        {/* 历史记录 */}
+                        <div style={{ marginTop: 10, color: "#6b7280", fontSize: 12 }}>
+                          历史复盘（按时间排序）：
+                        </div>
+                        {history.length ? (
+                          <div style={{ marginTop: 6, fontSize: 13 }}>
+                            {history.slice().reverse().map((h) => (
+                              <div key={h.id} style={{ padding: "4px 0", borderBottom: "1px solid #eef2f7" }}>
+                                <b>{String(h.month).slice(0, 7)}</b>：{h.value}
+                                {h.note ? <span style={{ color: "#6b7280" }}> · {h.note}</span> : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div style={{ marginTop: 6, fontSize: 13, color: "#6b7280" }}>暂无复盘记录</div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -303,14 +457,13 @@ const payload = {
               </div>
             )}
 
-            {/* KR 新增表单（每个 O 独立） */}
+            {/* 新增 KR（每个 O 独立） */}
             <div style={styles.subCard}>
               <div style={{ fontWeight: 600, marginBottom: 8 }}>新增 KR</div>
-
               <input
                 style={styles.input}
                 placeholder="KR 描述（必填）例如：内容电商 GSV ≥ 2600 万"
-                value={draft.title}
+                value={krDraft.title}
                 onChange={(e) => setKRDraft(o.id, { title: e.target.value })}
               />
 
@@ -321,7 +474,7 @@ const payload = {
                     style={styles.input}
                     type="number"
                     placeholder="例如：26000000"
-                    value={draft.target}
+                    value={krDraft.target}
                     onChange={(e) => setKRDraft(o.id, { target: e.target.value })}
                   />
                 </div>
@@ -331,24 +484,20 @@ const payload = {
                     style={styles.input}
                     type="number"
                     placeholder="例如：5000000"
-                    value={draft.current}
+                    value={krDraft.current}
                     onChange={(e) => setKRDraft(o.id, { current: e.target.value })}
                   />
                 </div>
               </div>
 
-              {draft.error ? <div style={styles.error}>{draft.error}</div> : null}
+              {krDraft.error ? <div style={styles.error}>{krDraft.error}</div> : null}
 
-              <button
-                style={styles.button}
-                onClick={() => addKR(o.id)}
-                disabled={draft.saving}
-              >
-                {draft.saving ? "新增中..." : "新增 KR"}
+              <button style={styles.button} onClick={() => addKR(o.id)} disabled={krDraft.saving}>
+                {krDraft.saving ? "新增中..." : "新增 KR"}
               </button>
 
               <div style={{ marginTop: 8, color: "#6b7280", fontSize: 12 }}>
-                小提示：目标值建议填“可度量数字”（如金额、次数、人效%、项目数），便于月度复盘对齐。
+                小提示：目标值建议填“可量化数字”（金额、次数、人效%、项目数），便于月度复盘对齐。
               </div>
             </div>
           </div>
@@ -369,7 +518,7 @@ const styles = {
     padding: 24,
   },
   container: {
-    maxWidth: 900,
+    maxWidth: 980,
     margin: "40px auto",
     padding: 16,
   },
@@ -388,7 +537,7 @@ const styles = {
   subCard: {
     borderTop: "1px dashed #e5e7eb",
     paddingTop: 12,
-    marginTop: 6,
+    marginTop: 10,
   },
   input: {
     width: "100%",
@@ -408,6 +557,11 @@ const styles = {
   grid2: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  },
+  grid3: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr 2fr",
     gap: 10,
   },
   label: {
@@ -443,7 +597,7 @@ const styles = {
     border: "1px solid #eef2f7",
     borderRadius: 10,
     padding: 10,
-    marginBottom: 10,
+    marginBottom: 12,
     background: "#fafafa",
   },
   krMeta: {
