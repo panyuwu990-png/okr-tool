@@ -16,35 +16,25 @@ export default function App() {
   const [checkins, setCheckins] = useState([]);
 
   const [newOTitle, setNewOTitle] = useState("");
-  const [newOMainOwner, setNewOMainOwner] = useState(""); // ✅ 新增：O 负责人
+  const [newOMainOwner, setNewOMainOwner] = useState("");
   const [newOError, setNewOError] = useState("");
 
-  // ✅ 页面切换：列表 / 关系树
   const [page, setPage] = useState("list"); // "list" | "tree"
 
-  // 当前正在编辑的 Objective
   const [editingOId, setEditingOId] = useState(null);
 
-  // 每个 O 独立的 KR 草稿（✅新增 main_owner）
   const [krDrafts, setKrDrafts] = useState({});
-
-  // 每个 KR 独立的月度复盘草稿
   const [checkinDrafts, setCheckinDrafts] = useState({});
 
-  // ✅ 复盘弹层：当前打开的 KR
-  const [checkinModalKr, setCheckinModalKr] = useState(null); // { kr, isEditing } | null
+  const [checkinModalKr, setCheckinModalKr] = useState(null);
 
-  // 统一的“更多菜单”状态：o:<oid> / kr:<krid> / ck:<checkinid>
   const [menuOpenKey, setMenuOpenKey] = useState(null);
   const menuRootRef = useRef(null);
 
-  // 点击空白关闭菜单
   useEffect(() => {
     function onDocClick(e) {
       if (!menuRootRef.current) return;
-      if (!menuRootRef.current.contains(e.target)) {
-        setMenuOpenKey(null);
-      }
+      if (!menuRootRef.current.contains(e.target)) setMenuOpenKey(null);
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
@@ -72,14 +62,8 @@ export default function App() {
 
     const [{ data: items, error: itemsErr }, { data: cks, error: cksErr }] =
       await Promise.all([
-        supabase
-          .from("okr_items")
-          .select("*")
-          .order("created_at", { ascending: true }),
-        supabase
-          .from("okr_checkins")
-          .select("*")
-          .order("created_at", { ascending: true }),
+        supabase.from("okr_items").select("*").order("created_at", { ascending: true }),
+        supabase.from("okr_checkins").select("*").order("created_at", { ascending: true }),
       ]);
 
     setLoading(false);
@@ -99,7 +83,6 @@ export default function App() {
     const data = items || [];
     setRows(data);
 
-    // 初始化草稿
     const os = data.filter((i) => i.type === "O");
     const krs = data.filter((i) => i.type === "KR");
 
@@ -109,7 +92,7 @@ export default function App() {
         if (!next[o.id])
           next[o.id] = {
             title: "",
-            main_owner: "", // ✅ 新增：KR 负责人草稿
+            main_owner: "",
             target: "",
             current: "",
             error: "",
@@ -120,21 +103,12 @@ export default function App() {
     });
 
     const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
-      2,
-      "0"
-    )}`;
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     setCheckinDrafts((prev) => {
       const next = { ...prev };
       for (const kr of krs) {
         if (!next[kr.id])
-          next[kr.id] = {
-            month: ym,
-            value: "",
-            note: "",
-            saving: false,
-            error: "",
-          };
+          next[kr.id] = { month: ym, value: "", note: "", saving: false, error: "" };
       }
       return next;
     });
@@ -143,10 +117,7 @@ export default function App() {
   const objectives = useMemo(() => {
     const os = rows.filter((r) => r.type === "O");
     const krs = rows.filter((r) => r.type === "KR");
-    return os.map((o) => ({
-      ...o,
-      krs: krs.filter((k) => k.parent_id === o.id),
-    }));
+    return os.map((o) => ({ ...o, krs: krs.filter((k) => k.parent_id === o.id) }));
   }, [rows]);
 
   const checkinsByKr = useMemo(() => {
@@ -180,7 +151,6 @@ export default function App() {
   }
 
   function ownerLabel(item) {
-    // ✅ 优先展示 main_owner，其次 fallback 到 owner_name/email
     const a = (item?.main_owner || "").trim();
     const b = (item?.owner_name || "").trim();
     const c = (item?.owner_email || "").trim();
@@ -193,7 +163,6 @@ export default function App() {
     setAuthSending(true);
     const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
     setAuthSending(false);
-
     if (error) return alert("发送登录链接失败：" + (error.message || "unknown error"));
     alert("登录链接已发送到邮箱（若没收到请看垃圾箱）");
   }
@@ -217,7 +186,7 @@ export default function App() {
       type: "O",
       level: "company",
       department: "company",
-      main_owner: (newOMainOwner || "").trim() || null, // ✅ 新增
+      main_owner: (newOMainOwner || "").trim() || null,
       owner_id: session.user.id,
       owner_email: session.user.email,
       owner_name: session.user.email,
@@ -245,18 +214,13 @@ export default function App() {
 
   async function deleteItem(id, label) {
     setMenuOpenKey(null);
-    if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其复盘记录）`))
-      return;
+    if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其复盘记录）`)) return;
 
     const { error } = await supabase.from("okr_items").delete().eq("id", id);
-    if (error) {
-      alert("删除失败：" + (error.message || "unknown error"));
-      return;
-    }
+    if (error) return alert("删除失败：" + (error.message || "unknown error"));
 
     if (editingOId === id) setEditingOId(null);
     if (checkinModalKr?.kr?.id === id) setCheckinModalKr(null);
-
     await loadAll();
   }
 
@@ -268,8 +232,7 @@ export default function App() {
   }
 
   async function addKR(objectiveId) {
-    const draft =
-      krDrafts[objectiveId] || ({ title: "", main_owner: "", target: "", current: "" });
+    const draft = krDrafts[objectiveId] || { title: "", main_owner: "", target: "", current: "" };
     const title = (draft.title || "").trim();
     const main_owner = (draft.main_owner || "").trim();
     const target = safeNumber(draft.target);
@@ -289,7 +252,6 @@ export default function App() {
     }
 
     const parentO = objectives.find((x) => x.id === objectiveId);
-
     setKRDraft(objectiveId, { error: "", saving: true });
 
     const payload = {
@@ -299,7 +261,7 @@ export default function App() {
       parent_id: objectiveId,
       level: parentO?.level || "company",
       department: parentO?.department || "company",
-      main_owner: main_owner || null, // ✅ 新增
+      main_owner: main_owner || null,
       target_value: target,
       current_value: current,
       owner_id: session.user.id,
@@ -309,10 +271,7 @@ export default function App() {
 
     const { error } = await supabase.from("okr_items").insert(payload);
     if (error) {
-      setKRDraft(objectiveId, {
-        saving: false,
-        error: "新增 KR 失败：" + (error.message || "unknown"),
-      });
+      setKRDraft(objectiveId, { saving: false, error: "新增 KR 失败：" + (error.message || "unknown") });
       return;
     }
 
@@ -327,26 +286,6 @@ export default function App() {
     await loadAll();
   }
 
-  async function updateKRCurrent(krId, newCurrentRaw) {
-    const n = safeNumber(newCurrentRaw);
-    if (!Number.isFinite(n) || n < 0) {
-      alert("当前值必须是 ≥ 0 的数字");
-      return;
-    }
-    const ok = await updateItem(krId, { current_value: n });
-    if (ok) await loadAll();
-  }
-
-  async function updateKRTarget(krId, newTargetRaw) {
-    const n = safeNumber(newTargetRaw);
-    if (!Number.isFinite(n) || n <= 0) {
-      alert("目标值必须是 > 0 的数字");
-      return;
-    }
-    const ok = await updateItem(krId, { target_value: n });
-    if (ok) await loadAll();
-  }
-
   async function updateTitle(id, raw) {
     const title = (raw || "").trim();
     if (!title) {
@@ -358,10 +297,23 @@ export default function App() {
     if (ok) await loadAll();
   }
 
-  // ✅ 新增：更新负责人（O/KR 通用）
   async function updateMainOwner(id, raw) {
     const main_owner = (raw || "").trim();
     const ok = await updateItem(id, { main_owner: main_owner || null });
+    if (ok) await loadAll();
+  }
+
+  async function updateKRCurrent(krId, newCurrentRaw) {
+    const n = safeNumber(newCurrentRaw);
+    if (!Number.isFinite(n) || n < 0) return alert("当前值必须是 ≥ 0 的数字");
+    const ok = await updateItem(krId, { current_value: n });
+    if (ok) await loadAll();
+  }
+
+  async function updateKRTarget(krId, newTargetRaw) {
+    const n = safeNumber(newTargetRaw);
+    if (!Number.isFinite(n) || n <= 0) return alert("目标值必须是 > 0 的数字");
+    const ok = await updateItem(krId, { target_value: n });
     if (ok) await loadAll();
   }
 
@@ -378,14 +330,8 @@ export default function App() {
     const monthFirstDay = ymToFirstDay(d.month);
     const valueNum = safeNumber(d.value);
 
-    if (!monthFirstDay) {
-      setCheckinDraft(kr.id, { error: "请选择月份（例如：2026-01）" });
-      return;
-    }
-    if (!Number.isFinite(valueNum) || valueNum < 0) {
-      setCheckinDraft(kr.id, { error: "复盘值必须是 ≥ 0 的数字" });
-      return;
-    }
+    if (!monthFirstDay) return setCheckinDraft(kr.id, { error: "请选择月份（例如：2026-01）" });
+    if (!Number.isFinite(valueNum) || valueNum < 0) return setCheckinDraft(kr.id, { error: "复盘值必须是 ≥ 0 的数字" });
 
     setCheckinDraft(kr.id, { saving: true, error: "" });
 
@@ -403,19 +349,13 @@ export default function App() {
       .upsert(payload, { onConflict: "kr_id,month" });
 
     if (insErr) {
-      setCheckinDraft(kr.id, {
-        saving: false,
-        error: "记录失败：" + (insErr.message || "unknown"),
-      });
+      setCheckinDraft(kr.id, { saving: false, error: "记录失败：" + (insErr.message || "unknown") });
       return;
     }
 
     const ok = await updateItem(kr.id, { current_value: valueNum });
     if (!ok) {
-      setCheckinDraft(kr.id, {
-        saving: false,
-        error: "复盘已记，但更新当前值失败",
-      });
+      setCheckinDraft(kr.id, { saving: false, error: "复盘已记，但更新当前值失败" });
       await loadAll();
       return;
     }
@@ -508,9 +448,7 @@ export default function App() {
                   style={styles.input}
                   type="month"
                   value={draft.month}
-                  onChange={(e) =>
-                    setCheckinDraft(kr.id, { month: e.target.value })
-                  }
+                  onChange={(e) => setCheckinDraft(kr.id, { month: e.target.value })}
                 />
               </div>
               <div>
@@ -520,9 +458,7 @@ export default function App() {
                   type="number"
                   placeholder="例如：5000000"
                   value={draft.value}
-                  onChange={(e) =>
-                    setCheckinDraft(kr.id, { value: e.target.value })
-                  }
+                  onChange={(e) => setCheckinDraft(kr.id, { value: e.target.value })}
                 />
               </div>
               <div>
@@ -531,20 +467,14 @@ export default function App() {
                   style={styles.input}
                   placeholder="例如：本月投放加码，ROI 提升"
                   value={draft.note}
-                  onChange={(e) =>
-                    setCheckinDraft(kr.id, { note: e.target.value })
-                  }
+                  onChange={(e) => setCheckinDraft(kr.id, { note: e.target.value })}
                 />
               </div>
             </div>
 
             {draft.error ? <div style={styles.error}>{draft.error}</div> : null}
 
-            <button
-              style={styles.button}
-              onClick={() => addCheckin(kr)}
-              disabled={draft.saving}
-            >
+            <button style={styles.button} onClick={() => addCheckin(kr)} disabled={draft.saving}>
               {draft.saving ? "记录中..." : "记录本月复盘"}
             </button>
           </>
@@ -554,26 +484,18 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ marginTop: 14, color: "#6b7280", fontSize: 12 }}>
-          历史复盘：
-        </div>
+        <div style={{ marginTop: 14, color: "#6b7280", fontSize: 12 }}>历史复盘：</div>
 
         {history.length ? (
           <div style={{ marginTop: 8 }}>
             {history.map((h) => (
               <div key={h.id} style={styles.checkinRow}>
-                <b style={{ width: 80, display: "inline-block" }}>
-                  {String(h.month).slice(0, 7)}
-                </b>
+                <b style={{ width: 80, display: "inline-block" }}>{String(h.month).slice(0, 7)}</b>
 
                 {!isEditing ? (
                   <>
                     <span style={{ marginLeft: 8 }}>值：{h.value}</span>
-                    {h.note ? (
-                      <span style={{ marginLeft: 10, color: "#6b7280" }}>
-                        备注：{h.note}
-                      </span>
-                    ) : null}
+                    {h.note ? <span style={{ marginLeft: 10, color: "#6b7280" }}>备注：{h.note}</span> : null}
                   </>
                 ) : (
                   <>
@@ -602,13 +524,7 @@ export default function App() {
 
                     <MoreMenu
                       menuKey={`ck:${h.id}`}
-                      items={[
-                        {
-                          label: "删除复盘",
-                          danger: true,
-                          onClick: () => deleteCheckin(h.id),
-                        },
-                      ]}
+                      items={[{ label: "删除复盘", danger: true, onClick: () => deleteCheckin(h.id) }]}
                     />
                   </>
                 )}
@@ -616,24 +532,23 @@ export default function App() {
             ))}
           </div>
         ) : (
-          <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>
-            暂无复盘记录
-          </div>
+          <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>暂无复盘记录</div>
         )}
       </div>
     );
   }
 
-  // ---------- Tree View ----------
+  // ---------- Tree View (with Zoom) ----------
   function TreeView({ objectives }) {
-    const wrapRef = useRef(null);
+    const wrapRef = useRef(null);          // 外层滚动容器
+    const contentRef = useRef(null);       // 被缩放的内容
     const [lines, setLines] = useState([]);
+    const nodeRefs = useRef(new Map());
 
-    const nodeRefs = useRef(new Map()); // key -> element
+    // ✅ 缩放比例（0.5x ~ 2.0x）
+    const [scale, setScale] = useState(1);
 
-    const root = useMemo(() => {
-      return { id: "root", title: "26年年度OKR", type: "ROOT", main_owner: "公司" };
-    }, []);
+    const root = useMemo(() => ({ id: "root", title: "26年年度OKR", type: "ROOT", main_owner: "公司" }), []);
 
     function setRef(key, el) {
       if (!key) return;
@@ -641,58 +556,44 @@ export default function App() {
       else nodeRefs.current.delete(key);
     }
 
-    function calcCenter(el) {
+    function calcPos(el) {
       const r = el.getBoundingClientRect();
-      const wr = wrapRef.current.getBoundingClientRect();
+      const cr = contentRef.current.getBoundingClientRect();
       return {
-        x: r.left - wr.left + r.width / 2,
-        y: r.top - wr.top + r.height / 2,
-        top: r.top - wr.top,
-        bottom: r.bottom - wr.top,
+        x: r.left - cr.left + r.width / 2,
+        top: r.top - cr.top,
+        bottom: r.bottom - cr.top,
       };
     }
 
     function recomputeLines() {
-      if (!wrapRef.current) return;
+      if (!contentRef.current) return;
       const newLines = [];
 
-      // root -> each O
       for (const o of objectives) {
         const rootEl = nodeRefs.current.get(`root`);
         const oEl = nodeRefs.current.get(`o:${o.id}`);
         if (!rootEl || !oEl) continue;
 
-        const a = calcCenter(rootEl);
-        const b = calcCenter(oEl);
-        newLines.push({
-          x1: a.x,
-          y1: a.bottom,
-          x2: b.x,
-          y2: b.top,
-        });
+        const a = calcPos(rootEl);
+        const b = calcPos(oEl);
+        newLines.push({ x1: a.x, y1: a.bottom, x2: b.x, y2: b.top });
 
-        // O -> each KR
         for (const kr of o.krs) {
           const krEl = nodeRefs.current.get(`kr:${kr.id}`);
           if (!krEl) continue;
-          const c = calcCenter(oEl);
-          const d = calcCenter(krEl);
-          newLines.push({
-            x1: c.x,
-            y1: c.bottom,
-            x2: d.x,
-            y2: d.top,
-          });
+          const c = calcPos(oEl);
+          const d = calcPos(krEl);
+          newLines.push({ x1: c.x, y1: c.bottom, x2: d.x, y2: d.top });
         }
       }
-
       setLines(newLines);
     }
 
     useLayoutEffect(() => {
       recomputeLines();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [objectives]);
+    }, [objectives, scale]);
 
     useEffect(() => {
       function onResize() {
@@ -701,129 +602,212 @@ export default function App() {
       window.addEventListener("resize", onResize);
       return () => window.removeEventListener("resize", onResize);
       // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scale]);
+
+    // ✅ Ctrl/⌘ + 滚轮缩放（可选但很好用）
+    useEffect(() => {
+      const el = wrapRef.current;
+      if (!el) return;
+
+      function onWheel(e) {
+        const isZoomGesture = e.ctrlKey || e.metaKey;
+        if (!isZoomGesture) return;
+        e.preventDefault();
+
+        setScale((s) => {
+          const next = clamp(s + (e.deltaY > 0 ? -0.08 : 0.08), 0.5, 2.0);
+          return round2(next);
+        });
+      }
+
+      el.addEventListener("wheel", onWheel, { passive: false });
+      return () => el.removeEventListener("wheel", onWheel);
     }, []);
+
+    function clamp(n, a, b) {
+      return Math.max(a, Math.min(b, n));
+    }
+    function round2(n) {
+      return Math.round(n * 100) / 100;
+    }
+
+    function zoomIn() {
+      setScale((s) => round2(clamp(s + 0.1, 0.5, 2.0)));
+    }
+    function zoomOut() {
+      setScale((s) => round2(clamp(s - 0.1, 0.5, 2.0)));
+    }
+    function resetZoom() {
+      setScale(1);
+    }
+
+    // ✅ 适配：让内容大致塞进可视区（简易版）
+    function fitZoom() {
+      const wrap = wrapRef.current;
+      const content = contentRef.current;
+      if (!wrap || !content) return;
+
+      // 先临时设为 1，测量真实大小
+      const prev = scale;
+      setScale(1);
+
+      // 下一帧计算
+      requestAnimationFrame(() => {
+        const wr = wrap.getBoundingClientRect();
+        const cr = content.getBoundingClientRect();
+
+        // 留一点边距
+        const padding = 40;
+        const availW = wr.width - padding;
+        const availH = wr.height - padding;
+
+        const ratioW = availW / cr.width;
+        const ratioH = availH / cr.height;
+        const next = round2(clamp(Math.min(ratioW, ratioH), 0.5, 2.0));
+
+        setScale(next);
+
+        // 如果你希望适配后自动滚回顶部居中
+        requestAnimationFrame(() => {
+          wrap.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+          // 还原 prev 不需要：我们已经 setScale(next)
+        });
+      });
+
+      // 避免 ESLint unused
+      void prev;
+    }
 
     const allKrs = objectives.flatMap((o) => o.krs || []);
     const rootProgress =
       allKrs.length === 0
         ? 0
         : Math.round(
-            allKrs.reduce(
-              (acc, k) => acc + calcProgress(k.current_value, k.target_value),
-              0
-            ) / allKrs.length
+            allKrs.reduce((acc, k) => acc + calcProgress(k.current_value, k.target_value), 0) /
+              allKrs.length
           );
 
     return (
       <div style={styles.treeOuter}>
-        <div style={styles.treeHint}>
-          提示：点击 KR 卡片可打开“复盘”弹层（查看/录入需先在列表页对该 O 点“修改”）。
+        <div style={styles.treeTopBar}>
+          <div style={styles.treeHint}>
+            提示：按住 Ctrl/⌘ + 滚轮可缩放。点击 KR 卡片可打开复盘。
+          </div>
+
+          <div style={styles.zoomBar}>
+            <button style={styles.zoomBtn} onClick={zoomOut}>－</button>
+            <div style={styles.zoomLabel}>{Math.round(scale * 100)}%</div>
+            <button style={styles.zoomBtn} onClick={zoomIn}>＋</button>
+            <button style={styles.zoomBtn2} onClick={fitZoom}>适配</button>
+            <button style={styles.zoomBtn2} onClick={resetZoom}>重置</button>
+          </div>
         </div>
 
         <div ref={wrapRef} style={styles.treeWrap}>
-          <svg style={styles.treeSvg}>
-            {lines.map((ln, i) => (
-              <line
-                key={i}
-                x1={ln.x1}
-                y1={ln.y1}
-                x2={ln.x2}
-                y2={ln.y2}
-                stroke="#d1d5db"
-                strokeWidth="2"
-              />
-            ))}
-          </svg>
+          {/* 被缩放的内容层 */}
+          <div
+            ref={contentRef}
+            style={{
+              position: "relative",
+              transform: `scale(${scale})`,
+              transformOrigin: "top left",
+              width: "max-content",
+              padding: 20,
+            }}
+          >
+            <svg style={styles.treeSvg}>
+              {lines.map((ln, i) => (
+                <line
+                  key={i}
+                  x1={ln.x1}
+                  y1={ln.y1}
+                  x2={ln.x2}
+                  y2={ln.y2}
+                  stroke="#d1d5db"
+                  strokeWidth="2"
+                />
+              ))}
+            </svg>
 
-          {/* Root */}
-          <div style={styles.treeLevel}>
-            <div
-              ref={(el) => setRef("root", el)}
-              style={{ ...styles.nodeCard, ...styles.nodeRoot }}
-            >
-              <div style={styles.nodeTitle}>{root.title}</div>
-              <div style={styles.nodeSub}>负责人：{ownerLabel(root)}</div>
-              <div style={styles.nodeMeta}>
-                目标类型：公司
-                <span style={{ float: "right", fontWeight: 700 }}>
-                  {rootProgress}%
-                </span>
+            {/* Root */}
+            <div style={styles.treeLevel}>
+              <div
+                ref={(el) => setRef("root", el)}
+                style={{ ...styles.nodeCard, ...styles.nodeRoot }}
+              >
+                <div style={styles.nodeTitle}>{root.title}</div>
+                <div style={styles.nodeSubSmall}>负责人：{ownerLabel(root)}</div>
+                <div style={styles.nodeMeta}>
+                  类型：公司
+                  <span style={{ float: "right", fontWeight: 700 }}>{rootProgress}%</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* O Level */}
-          <div style={{ ...styles.treeLevel, marginTop: 26 }}>
-            <div style={styles.treeRow}>
-              {objectives.map((o, idx) => {
-                const oProgress =
-                  o.krs?.length
-                    ? Math.round(
-                        o.krs.reduce(
-                          (acc, k) =>
-                            acc + calcProgress(k.current_value, k.target_value),
-                          0
-                        ) / o.krs.length
-                      )
-                    : 0;
+            {/* O Level */}
+            <div style={{ ...styles.treeLevel, marginTop: 26 }}>
+              <div style={styles.treeRow}>
+                {objectives.map((o, idx) => {
+                  const oProgress =
+                    o.krs?.length
+                      ? Math.round(
+                          o.krs.reduce(
+                            (acc, k) => acc + calcProgress(k.current_value, k.target_value),
+                            0
+                          ) / o.krs.length
+                        )
+                      : 0;
 
-                return (
-                  <div
-                    key={o.id}
-                    ref={(el) => setRef(`o:${o.id}`, el)}
-                    style={{ ...styles.nodeCard, minWidth: 260 }}
-                    title={o.title}
-                  >
-                    <div style={styles.nodeTitle}>{`O${idx + 1}`}</div>
-                    <div style={styles.nodeSub}>{o.title}</div>
-                    <div style={styles.nodeSubSmall}>
-                      负责人：{ownerLabel(o)}
-                    </div>
-                    <div style={styles.nodeMeta}>
-                      目标类型：公司
-                      <span style={{ float: "right", fontWeight: 700 }}>
-                        {oProgress}%
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* KR Level */}
-          <div style={{ ...styles.treeLevel, marginTop: 26 }}>
-            <div style={styles.treeRow}>
-              {objectives.map((o) => (
-                <div key={o.id} style={styles.krCol}>
-                  {(o.krs || []).map((k, kIdx) => {
-                    const p = calcProgress(k.current_value, k.target_value);
-                    return (
-                      <div
-                        key={k.id}
-                        ref={(el) => setRef(`kr:${k.id}`, el)}
-                        style={{ ...styles.nodeCard, cursor: "pointer" }}
-                        onClick={() => setCheckinModalKr({ kr: k, isEditing: false })}
-                        title="点击打开复盘"
-                      >
-                        <div style={styles.nodeTitle}>{`KR${kIdx + 1}`}</div>
-                        <div style={styles.nodeSub}>{k.title}</div>
-                        <div style={styles.nodeSubSmall}>
-                          负责人：{ownerLabel(k)}
-                        </div>
-                        <div style={styles.nodeMeta}>
-                          <span style={{ color: "#6b7280" }}>
-                            {k.current_value ?? 0}/{k.target_value ?? "-"}
-                          </span>
-                          <span style={{ float: "right", fontWeight: 700 }}>
-                            {p}%
-                          </span>
-                        </div>
+                  return (
+                    <div
+                      key={o.id}
+                      ref={(el) => setRef(`o:${o.id}`, el)}
+                      style={{ ...styles.nodeCard, minWidth: 260 }}
+                      title={o.title}
+                    >
+                      <div style={styles.nodeTitle}>{`O${idx + 1}`}</div>
+                      <div style={styles.nodeSub}>{o.title}</div>
+                      <div style={styles.nodeSubSmall}>负责人：{ownerLabel(o)}</div>
+                      <div style={styles.nodeMeta}>
+                        类型：公司
+                        <span style={{ float: "right", fontWeight: 700 }}>{oProgress}%</span>
                       </div>
-                    );
-                  })}
-                </div>
-              ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* KR Level */}
+            <div style={{ ...styles.treeLevel, marginTop: 26 }}>
+              <div style={styles.treeRow}>
+                {objectives.map((o) => (
+                  <div key={o.id} style={styles.krCol}>
+                    {(o.krs || []).map((k, kIdx) => {
+                      const p = calcProgress(k.current_value, k.target_value);
+                      return (
+                        <div
+                          key={k.id}
+                          ref={(el) => setRef(`kr:${k.id}`, el)}
+                          style={{ ...styles.nodeCard, cursor: "pointer" }}
+                          onClick={() => setCheckinModalKr({ kr: k, isEditing: false })}
+                          title="点击打开复盘"
+                        >
+                          <div style={styles.nodeTitle}>{`KR${kIdx + 1}`}</div>
+                          <div style={styles.nodeSub}>{k.title}</div>
+                          <div style={styles.nodeSubSmall}>负责人：{ownerLabel(k)}</div>
+                          <div style={styles.nodeMeta}>
+                            <span style={{ color: "#6b7280" }}>
+                              {k.current_value ?? 0}/{k.target_value ?? "-"}
+                            </span>
+                            <span style={{ float: "right", fontWeight: 700 }}>{p}%</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -889,8 +873,6 @@ export default function App() {
               value={newOTitle}
               onChange={(e) => setNewOTitle(e.target.value)}
             />
-
-            {/* ✅ 新增：O 负责人输入 */}
             <input
               style={styles.input}
               placeholder="主要负责人（例如：张三）"
@@ -920,7 +902,6 @@ export default function App() {
 
             return (
               <div key={o.id} style={styles.card}>
-                {/* O Header */}
                 <div style={styles.oHeader}>
                   <div style={{ fontWeight: 800, fontSize: 16 }}>
                     {`O${idx + 1}：`}
@@ -941,10 +922,7 @@ export default function App() {
                       onClick={() => {
                         setMenuOpenKey(null);
                         setEditingOId(isEditing ? null : o.id);
-
-                        if (isEditing && checkinModalKr) {
-                          setCheckinModalKr({ ...checkinModalKr, isEditing: false });
-                        }
+                        if (isEditing && checkinModalKr) setCheckinModalKr({ ...checkinModalKr, isEditing: false });
                       }}
                     >
                       {isEditing ? "完成" : "修改"}
@@ -953,19 +931,12 @@ export default function App() {
                     {isEditing ? (
                       <MoreMenu
                         menuKey={`o:${o.id}`}
-                        items={[
-                          {
-                            label: "删除 O",
-                            danger: true,
-                            onClick: () => deleteItem(o.id, `O${idx + 1}`),
-                          },
-                        ]}
+                        items={[{ label: "删除 O", danger: true, onClick: () => deleteItem(o.id, `O${idx + 1}`) }]}
                       />
                     ) : null}
                   </div>
                 </div>
 
-                {/* ✅ O 负责人显示/编辑 */}
                 <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
                   主要负责人：
                   {isEditing ? (
@@ -976,13 +947,10 @@ export default function App() {
                       onBlur={(e) => updateMainOwner(o.id, e.target.value)}
                     />
                   ) : (
-                    <b style={{ marginLeft: 6, color: "#111827" }}>
-                      {ownerLabel(o)}
-                    </b>
+                    <b style={{ marginLeft: 6, color: "#111827" }}>{ownerLabel(o)}</b>
                   )}
                 </div>
 
-                {/* KR List */}
                 {o.krs.length ? (
                   <div style={{ marginTop: 12, marginBottom: 12 }}>
                     {o.krs.map((k, kIdx) => {
@@ -1004,17 +972,8 @@ export default function App() {
                               )}
                             </div>
 
-                            <div
-                              style={{
-                                display: "flex",
-                                gap: 10,
-                                alignItems: "center",
-                              }}
-                            >
-                              <div style={{ color: "#6b7280", fontSize: 12 }}>
-                                {`进度 ${progress}%`}
-                              </div>
-
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <div style={{ color: "#6b7280", fontSize: 12 }}>{`进度 ${progress}%`}</div>
                               <button
                                 style={styles.ghost}
                                 onClick={() => {
@@ -1028,19 +987,12 @@ export default function App() {
                               {isEditing ? (
                                 <MoreMenu
                                   menuKey={`kr:${k.id}`}
-                                  items={[
-                                    {
-                                      label: "删除 KR",
-                                      danger: true,
-                                      onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
-                                    },
-                                  ]}
+                                  items={[{ label: "删除 KR", danger: true, onClick: () => deleteItem(k.id, `KR${kIdx + 1}`) }]}
                                 />
                               ) : null}
                             </div>
                           </div>
 
-                          {/* ✅ KR 负责人显示/编辑 */}
                           <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
                             主要负责人：
                             {isEditing ? (
@@ -1051,13 +1003,10 @@ export default function App() {
                                 onBlur={(e) => updateMainOwner(k.id, e.target.value)}
                               />
                             ) : (
-                              <b style={{ marginLeft: 6, color: "#111827" }}>
-                                {ownerLabel(k)}
-                              </b>
+                              <b style={{ marginLeft: 6, color: "#111827" }}>{ownerLabel(k)}</b>
                             )}
                           </div>
 
-                          {/* Target/Current */}
                           <div style={styles.krMeta}>
                             <span>目标：</span>
                             {isEditing ? (
@@ -1084,13 +1033,7 @@ export default function App() {
                             )}
 
                             {isEditing ? (
-                              <span
-                                style={{
-                                  marginLeft: 8,
-                                  color: "#6b7280",
-                                  fontSize: 12,
-                                }}
-                              >
+                              <span style={{ marginLeft: 8, color: "#6b7280", fontSize: 12 }}>
                                 （改完点空白处自动保存）
                               </span>
                             ) : null}
@@ -1100,19 +1043,11 @@ export default function App() {
                     })}
                   </div>
                 ) : (
-                  <div
-                    style={{
-                      color: "#6b7280",
-                      fontSize: 13,
-                      marginTop: 10,
-                      marginBottom: 12,
-                    }}
-                  >
+                  <div style={{ color: "#6b7280", fontSize: 13, marginTop: 10, marginBottom: 12 }}>
                     还没有 KR，建议先拆 2–4 个可量化的关键结果。
                   </div>
                 )}
 
-                {/* 新增 KR：只在编辑模式显示 */}
                 {isEditing ? (
                   <div style={styles.subCard}>
                     <div style={{ fontWeight: 700, marginBottom: 8 }}>新增 KR</div>
@@ -1122,8 +1057,6 @@ export default function App() {
                       value={krDraft.title}
                       onChange={(e) => setKRDraft(o.id, { title: e.target.value })}
                     />
-
-                    {/* ✅ 新增：KR 负责人 */}
                     <input
                       style={styles.input}
                       placeholder="主要负责人（例如：李四）"
@@ -1156,11 +1089,7 @@ export default function App() {
 
                     {krDraft.error ? <div style={styles.error}>{krDraft.error}</div> : null}
 
-                    <button
-                      style={styles.button}
-                      onClick={() => addKR(o.id)}
-                      disabled={krDraft.saving}
-                    >
+                    <button style={styles.button} onClick={() => addKR(o.id)} disabled={krDraft.saving}>
                       {krDraft.saving ? "新增中..." : "新增 KR"}
                     </button>
                   </div>
@@ -1171,14 +1100,11 @@ export default function App() {
         </>
       )}
 
-      {/* ✅ 复盘弹层（列表页/树状页都可打开） */}
       <Modal
         open={!!checkinModalKr}
         title={
           checkinModalKr
-            ? `月度复盘｜${checkinModalKr.kr.title}（负责人：${ownerLabel(
-                checkinModalKr.kr
-              )}）`
+            ? `月度复盘｜${checkinModalKr.kr.title}（负责人：${ownerLabel(checkinModalKr.kr)}）`
             : ""
         }
         onClose={() => setCheckinModalKr(null)}
@@ -1189,13 +1115,7 @@ export default function App() {
             isEditing={checkinModalKr.isEditing}
             history={(checkinsByKr[checkinModalKr.kr.id] || []).slice().reverse()}
             draft={
-              checkinDrafts[checkinModalKr.kr.id] || {
-                month: "",
-                value: "",
-                note: "",
-                saving: false,
-                error: "",
-              }
+              checkinDrafts[checkinModalKr.kr.id] || { month: "", value: "", note: "", saving: false, error: "" }
             }
           />
         ) : null}
@@ -1483,18 +1403,55 @@ const styles = {
     background: "#fff",
     padding: 14,
   },
+  treeTopBar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10,
+  },
   treeHint: {
     color: "#6b7280",
     fontSize: 12,
-    marginBottom: 10,
   },
+  zoomBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  zoomBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    cursor: "pointer",
+    fontWeight: 900,
+    lineHeight: "1",
+  },
+  zoomBtn2: {
+    height: 34,
+    padding: "0 10px",
+    borderRadius: 10,
+    border: "1px solid #e5e7eb",
+    background: "#fff",
+    cursor: "pointer",
+    fontWeight: 800,
+  },
+  zoomLabel: {
+    minWidth: 56,
+    textAlign: "center",
+    fontWeight: 900,
+    color: "#111827",
+  },
+
   treeWrap: {
     position: "relative",
-    overflowX: "auto",
-    padding: 20,
+    overflow: "auto",
     borderRadius: 12,
     background: "#fafafa",
     border: "1px solid #eef2f7",
+    height: "72vh",
   },
   treeSvg: {
     position: "absolute",
