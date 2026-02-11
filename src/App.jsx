@@ -16,6 +16,7 @@ export default function App() {
   const [checkins, setCheckins] = useState([]);
 
   const [newOTitle, setNewOTitle] = useState("");
+  const [newOMainOwner, setNewOMainOwner] = useState(""); // ✅ 新增：O 负责人
   const [newOError, setNewOError] = useState("");
 
   // ✅ 页面切换：列表 / 关系树
@@ -24,7 +25,7 @@ export default function App() {
   // 当前正在编辑的 Objective
   const [editingOId, setEditingOId] = useState(null);
 
-  // 每个 O 独立的 KR 草稿
+  // 每个 O 独立的 KR 草稿（✅新增 main_owner）
   const [krDrafts, setKrDrafts] = useState({});
 
   // 每个 KR 独立的月度复盘草稿
@@ -108,6 +109,7 @@ export default function App() {
         if (!next[o.id])
           next[o.id] = {
             title: "",
+            main_owner: "", // ✅ 新增：KR 负责人草稿
             target: "",
             current: "",
             error: "",
@@ -126,7 +128,13 @@ export default function App() {
       const next = { ...prev };
       for (const kr of krs) {
         if (!next[kr.id])
-          next[kr.id] = { month: ym, value: "", note: "", saving: false, error: "" };
+          next[kr.id] = {
+            month: ym,
+            value: "",
+            note: "",
+            saving: false,
+            error: "",
+          };
       }
       return next;
     });
@@ -171,6 +179,14 @@ export default function App() {
     return `${ym}-01`;
   }
 
+  function ownerLabel(item) {
+    // ✅ 优先展示 main_owner，其次 fallback 到 owner_name/email
+    const a = (item?.main_owner || "").trim();
+    const b = (item?.owner_name || "").trim();
+    const c = (item?.owner_email || "").trim();
+    return a || b || c || "未设置";
+  }
+
   // ---------- Auth Actions ----------
   async function signIn() {
     if (!email.trim()) return alert("请输入邮箱");
@@ -201,6 +217,7 @@ export default function App() {
       type: "O",
       level: "company",
       department: "company",
+      main_owner: (newOMainOwner || "").trim() || null, // ✅ 新增
       owner_id: session.user.id,
       owner_email: session.user.email,
       owner_name: session.user.email,
@@ -213,6 +230,7 @@ export default function App() {
     if (error) return alert("新增 O 失败：" + (error.message || "unknown error"));
 
     setNewOTitle("");
+    setNewOMainOwner("");
     await loadAll();
   }
 
@@ -250,8 +268,10 @@ export default function App() {
   }
 
   async function addKR(objectiveId) {
-    const draft = krDrafts[objectiveId] || { title: "", target: "", current: "" };
+    const draft =
+      krDrafts[objectiveId] || ({ title: "", main_owner: "", target: "", current: "" });
     const title = (draft.title || "").trim();
+    const main_owner = (draft.main_owner || "").trim();
     const target = safeNumber(draft.target);
     const current = safeNumber(draft.current);
 
@@ -279,6 +299,7 @@ export default function App() {
       parent_id: objectiveId,
       level: parentO?.level || "company",
       department: parentO?.department || "company",
+      main_owner: main_owner || null, // ✅ 新增
       target_value: target,
       current_value: current,
       owner_id: session.user.id,
@@ -297,6 +318,7 @@ export default function App() {
 
     setKRDraft(objectiveId, {
       title: "",
+      main_owner: "",
       target: "",
       current: "",
       saving: false,
@@ -333,6 +355,13 @@ export default function App() {
       return;
     }
     const ok = await updateItem(id, { title });
+    if (ok) await loadAll();
+  }
+
+  // ✅ 新增：更新负责人（O/KR 通用）
+  async function updateMainOwner(id, raw) {
+    const main_owner = (raw || "").trim();
+    const ok = await updateItem(id, { main_owner: main_owner || null });
     if (ok) await loadAll();
   }
 
@@ -491,7 +520,9 @@ export default function App() {
                   type="number"
                   placeholder="例如：5000000"
                   value={draft.value}
-                  onChange={(e) => setCheckinDraft(kr.id, { value: e.target.value })}
+                  onChange={(e) =>
+                    setCheckinDraft(kr.id, { value: e.target.value })
+                  }
                 />
               </div>
               <div>
@@ -500,7 +531,9 @@ export default function App() {
                   style={styles.input}
                   placeholder="例如：本月投放加码，ROI 提升"
                   value={draft.note}
-                  onChange={(e) => setCheckinDraft(kr.id, { note: e.target.value })}
+                  onChange={(e) =>
+                    setCheckinDraft(kr.id, { note: e.target.value })
+                  }
                 />
               </div>
             </div>
@@ -521,7 +554,9 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ marginTop: 14, color: "#6b7280", fontSize: 12 }}>历史复盘：</div>
+        <div style={{ marginTop: 14, color: "#6b7280", fontSize: 12 }}>
+          历史复盘：
+        </div>
 
         {history.length ? (
           <div style={{ marginTop: 8 }}>
@@ -568,7 +603,11 @@ export default function App() {
                     <MoreMenu
                       menuKey={`ck:${h.id}`}
                       items={[
-                        { label: "删除复盘", danger: true, onClick: () => deleteCheckin(h.id) },
+                        {
+                          label: "删除复盘",
+                          danger: true,
+                          onClick: () => deleteCheckin(h.id),
+                        },
                       ]}
                     />
                   </>
@@ -577,13 +616,15 @@ export default function App() {
             ))}
           </div>
         ) : (
-          <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>暂无复盘记录</div>
+          <div style={{ marginTop: 8, fontSize: 13, color: "#6b7280" }}>
+            暂无复盘记录
+          </div>
         )}
       </div>
     );
   }
 
-  // ---------- Tree View (关系树) ----------
+  // ---------- Tree View ----------
   function TreeView({ objectives }) {
     const wrapRef = useRef(null);
     const [lines, setLines] = useState([]);
@@ -591,8 +632,7 @@ export default function App() {
     const nodeRefs = useRef(new Map()); // key -> element
 
     const root = useMemo(() => {
-      // 你可以改成“2026年年度OKR”
-      return { id: "root", title: "26年年度OKR", type: "ROOT" };
+      return { id: "root", title: "26年年度OKR", type: "ROOT", main_owner: "公司" };
     }, []);
 
     function setRef(key, el) {
@@ -663,7 +703,6 @@ export default function App() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // 计算 root 的进度：可简单用所有 KR 平均进度（可按需改）
     const allKrs = objectives.flatMap((o) => o.krs || []);
     const rootProgress =
       allKrs.length === 0
@@ -682,7 +721,6 @@ export default function App() {
         </div>
 
         <div ref={wrapRef} style={styles.treeWrap}>
-          {/* SVG 连线层 */}
           <svg style={styles.treeSvg}>
             {lines.map((ln, i) => (
               <line
@@ -704,9 +742,12 @@ export default function App() {
               style={{ ...styles.nodeCard, ...styles.nodeRoot }}
             >
               <div style={styles.nodeTitle}>{root.title}</div>
+              <div style={styles.nodeSub}>负责人：{ownerLabel(root)}</div>
               <div style={styles.nodeMeta}>
                 目标类型：公司
-                <span style={{ float: "right", fontWeight: 700 }}>{rootProgress}%</span>
+                <span style={{ float: "right", fontWeight: 700 }}>
+                  {rootProgress}%
+                </span>
               </div>
             </div>
           </div>
@@ -719,7 +760,8 @@ export default function App() {
                   o.krs?.length
                     ? Math.round(
                         o.krs.reduce(
-                          (acc, k) => acc + calcProgress(k.current_value, k.target_value),
+                          (acc, k) =>
+                            acc + calcProgress(k.current_value, k.target_value),
                           0
                         ) / o.krs.length
                       )
@@ -734,6 +776,9 @@ export default function App() {
                   >
                     <div style={styles.nodeTitle}>{`O${idx + 1}`}</div>
                     <div style={styles.nodeSub}>{o.title}</div>
+                    <div style={styles.nodeSubSmall}>
+                      负责人：{ownerLabel(o)}
+                    </div>
                     <div style={styles.nodeMeta}>
                       目标类型：公司
                       <span style={{ float: "right", fontWeight: 700 }}>
@@ -746,7 +791,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* KR Level: 每个 O 的 KR 一列 */}
+          {/* KR Level */}
           <div style={{ ...styles.treeLevel, marginTop: 26 }}>
             <div style={styles.treeRow}>
               {objectives.map((o) => (
@@ -763,11 +808,16 @@ export default function App() {
                       >
                         <div style={styles.nodeTitle}>{`KR${kIdx + 1}`}</div>
                         <div style={styles.nodeSub}>{k.title}</div>
+                        <div style={styles.nodeSubSmall}>
+                          负责人：{ownerLabel(k)}
+                        </div>
                         <div style={styles.nodeMeta}>
                           <span style={{ color: "#6b7280" }}>
                             {k.current_value ?? 0}/{k.target_value ?? "-"}
                           </span>
-                          <span style={{ float: "right", fontWeight: 700 }}>{p}%</span>
+                          <span style={{ float: "right", fontWeight: 700 }}>
+                            {p}%
+                          </span>
                         </div>
                       </div>
                     );
@@ -806,7 +856,6 @@ export default function App() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <h2 style={{ margin: 0 }}>OKR（O → KR）</h2>
 
-          {/* ✅ 页面切换 */}
           <div style={styles.tabs}>
             <button
               style={page === "list" ? styles.tabActive : styles.tab}
@@ -840,6 +889,15 @@ export default function App() {
               value={newOTitle}
               onChange={(e) => setNewOTitle(e.target.value)}
             />
+
+            {/* ✅ 新增：O 负责人输入 */}
+            <input
+              style={styles.input}
+              placeholder="主要负责人（例如：张三）"
+              value={newOMainOwner}
+              onChange={(e) => setNewOMainOwner(e.target.value)}
+            />
+
             {newOError ? <div style={styles.error}>{newOError}</div> : null}
             <button style={styles.button} onClick={addObjective} disabled={loading}>
               {loading ? "处理中..." : "新增 O"}
@@ -853,6 +911,7 @@ export default function App() {
             const krDraft =
               krDrafts[o.id] || {
                 title: "",
+                main_owner: "",
                 target: "",
                 current: "",
                 error: "",
@@ -883,7 +942,6 @@ export default function App() {
                         setMenuOpenKey(null);
                         setEditingOId(isEditing ? null : o.id);
 
-                        // 如果从编辑切回只读，弹层还开着，也切回只读
                         if (isEditing && checkinModalKr) {
                           setCheckinModalKr({ ...checkinModalKr, isEditing: false });
                         }
@@ -892,7 +950,6 @@ export default function App() {
                       {isEditing ? "完成" : "修改"}
                     </button>
 
-                    {/* 更多：只在编辑模式显示 */}
                     {isEditing ? (
                       <MoreMenu
                         menuKey={`o:${o.id}`}
@@ -906,6 +963,23 @@ export default function App() {
                       />
                     ) : null}
                   </div>
+                </div>
+
+                {/* ✅ O 负责人显示/编辑 */}
+                <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
+                  主要负责人：
+                  {isEditing ? (
+                    <input
+                      style={{ ...styles.inlineInput, marginLeft: 8, width: 220 }}
+                      defaultValue={o.main_owner || ""}
+                      placeholder="例如：张三"
+                      onBlur={(e) => updateMainOwner(o.id, e.target.value)}
+                    />
+                  ) : (
+                    <b style={{ marginLeft: 6, color: "#111827" }}>
+                      {ownerLabel(o)}
+                    </b>
+                  )}
                 </div>
 
                 {/* KR List */}
@@ -930,12 +1004,17 @@ export default function App() {
                               )}
                             </div>
 
-                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 10,
+                                alignItems: "center",
+                              }}
+                            >
                               <div style={{ color: "#6b7280", fontSize: 12 }}>
                                 {`进度 ${progress}%`}
                               </div>
 
-                              {/* 复盘按钮：打开弹层 */}
                               <button
                                 style={styles.ghost}
                                 onClick={() => {
@@ -959,6 +1038,23 @@ export default function App() {
                                 />
                               ) : null}
                             </div>
+                          </div>
+
+                          {/* ✅ KR 负责人显示/编辑 */}
+                          <div style={{ marginTop: 8, color: "#6b7280", fontSize: 13 }}>
+                            主要负责人：
+                            {isEditing ? (
+                              <input
+                                style={{ ...styles.inlineInput, marginLeft: 8, width: 220 }}
+                                defaultValue={k.main_owner || ""}
+                                placeholder="例如：李四"
+                                onBlur={(e) => updateMainOwner(k.id, e.target.value)}
+                              />
+                            ) : (
+                              <b style={{ marginLeft: 6, color: "#111827" }}>
+                                {ownerLabel(k)}
+                              </b>
+                            )}
                           </div>
 
                           {/* Target/Current */}
@@ -988,7 +1084,13 @@ export default function App() {
                             )}
 
                             {isEditing ? (
-                              <span style={{ marginLeft: 8, color: "#6b7280", fontSize: 12 }}>
+                              <span
+                                style={{
+                                  marginLeft: 8,
+                                  color: "#6b7280",
+                                  fontSize: 12,
+                                }}
+                              >
                                 （改完点空白处自动保存）
                               </span>
                             ) : null}
@@ -1019,6 +1121,14 @@ export default function App() {
                       placeholder="KR 描述（必填）例如：内容电商 GSV ≥ 2600 万"
                       value={krDraft.title}
                       onChange={(e) => setKRDraft(o.id, { title: e.target.value })}
+                    />
+
+                    {/* ✅ 新增：KR 负责人 */}
+                    <input
+                      style={styles.input}
+                      placeholder="主要负责人（例如：李四）"
+                      value={krDraft.main_owner}
+                      onChange={(e) => setKRDraft(o.id, { main_owner: e.target.value })}
                     />
 
                     <div style={styles.grid2}>
@@ -1064,7 +1174,13 @@ export default function App() {
       {/* ✅ 复盘弹层（列表页/树状页都可打开） */}
       <Modal
         open={!!checkinModalKr}
-        title={checkinModalKr ? `月度复盘｜${checkinModalKr.kr.title}` : ""}
+        title={
+          checkinModalKr
+            ? `月度复盘｜${checkinModalKr.kr.title}（负责人：${ownerLabel(
+                checkinModalKr.kr
+              )}）`
+            : ""
+        }
         onClose={() => setCheckinModalKr(null)}
       >
         {checkinModalKr ? (
@@ -1277,7 +1393,6 @@ const styles = {
     borderBottom: "1px solid #eef2f7",
   },
 
-  // ··· 按钮 & 菜单
   iconBtn: {
     width: 36,
     height: 36,
@@ -1322,7 +1437,6 @@ const styles = {
     color: "#b91c1c",
   },
 
-  // Modal
   modalMask: {
     position: "fixed",
     inset: 0,
@@ -1363,7 +1477,6 @@ const styles = {
     lineHeight: "1",
   },
 
-  // Tree
   treeOuter: {
     border: "1px solid #e5e7eb",
     borderRadius: 12,
@@ -1433,6 +1546,12 @@ const styles = {
     maxHeight: 40,
     overflow: "hidden",
     textOverflow: "ellipsis",
+  },
+  nodeSubSmall: {
+    color: "#6b7280",
+    fontSize: 12,
+    marginTop: 6,
+    marginBottom: 10,
   },
   nodeMeta: {
     color: "#6b7280",
