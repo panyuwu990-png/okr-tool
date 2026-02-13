@@ -42,7 +42,6 @@ export default function App() {
     document.body.style.fontFamily =
       'ui-sans-serif, system-ui, -apple-system, "SF Pro Display","SF Pro Text", Segoe UI, Roboto, Helvetica, Arial';
 
-    // light + subtle aurora
     document.body.style.background =
       "radial-gradient(1000px 700px at 15% 10%, rgba(0, 122, 255, 0.10), transparent 60%)," +
       "radial-gradient(900px 600px at 85% 15%, rgba(175, 82, 222, 0.10), transparent 55%)," +
@@ -67,6 +66,15 @@ export default function App() {
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
+
+  // ---------- Helpers: number format ----------
+  const nf = useMemo(() => new Intl.NumberFormat("zh-CN"), []);
+  function formatNumber(n) {
+    if (n === null || n === undefined || n === "") return "-";
+    const num = Number(n);
+    if (!Number.isFinite(num)) return String(n);
+    return nf.format(num);
+  }
 
   // ---------- Auth ----------
   useEffect(() => {
@@ -466,6 +474,15 @@ export default function App() {
     );
   }
 
+  function ProgressBar({ value }) {
+    const v = Math.max(0, Math.min(100, Number(value) || 0));
+    return (
+      <div style={styles.progressTrack} aria-label={`progress ${v}%`}>
+        <div style={{ ...styles.progressFill, width: `${v}%` }} />
+      </div>
+    );
+  }
+
   function MoreMenu({ menuKey, items }) {
     const isOpen = menuOpenKey === menuKey;
     return (
@@ -583,7 +600,7 @@ export default function App() {
                     <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
                       <div>
                         <span style={styles.muted}>值：</span>
-                        <b>{h.value}</b>
+                        <b>{formatNumber(h.value)}</b>
                       </div>
                       {h.note ? (
                         <div style={{ maxWidth: 640 }}>
@@ -634,13 +651,14 @@ export default function App() {
     );
   }
 
-  // ---------- Tree View (Zoom, Light style) ----------
+  // ---------- Tree View (Zoom + Fullscreen) ----------
   function TreeView({ objectives }) {
     const wrapRef = useRef(null);
     const contentRef = useRef(null);
     const [lines, setLines] = useState([]);
     const nodeRefs = useRef(new Map());
     const [scale, setScale] = useState(1);
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     const root = useMemo(
       () => ({ id: "root", title: "26年年度OKR", type: "ROOT", main_owner: "公司" }),
@@ -716,6 +734,19 @@ export default function App() {
       return () => el.removeEventListener("wheel", onWheel);
     }, []);
 
+    // fullscreen state tracking
+    useEffect(() => {
+      function onFsChange() {
+        const fsEl = document.fullscreenElement;
+        setIsFullscreen(!!fsEl);
+        // fullscreen 切换后线条需要重算
+        setTimeout(() => recomputeLines(), 50);
+      }
+      document.addEventListener("fullscreenchange", onFsChange);
+      return () => document.removeEventListener("fullscreenchange", onFsChange);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     function clamp(n, a, b) {
       return Math.max(a, Math.min(b, n));
     }
@@ -752,6 +783,20 @@ export default function App() {
       });
     }
 
+    async function toggleFullscreen() {
+      const el = wrapRef.current;
+      if (!el) return;
+      if (!document.fullscreenElement) {
+        try {
+          await el.requestFullscreen();
+        } catch (e) {
+          alert("进入全屏失败（浏览器可能限制）");
+        }
+      } else {
+        await document.exitFullscreen();
+      }
+    }
+
     const allKrs = objectives.flatMap((o) => o.krs || []);
     const rootProgress =
       allKrs.length === 0
@@ -783,10 +828,13 @@ export default function App() {
             <Button variant="ghost" onClick={resetZoom}>
               重置
             </Button>
+            <Button variant={isFullscreen ? "soft" : "primary"} onClick={toggleFullscreen}>
+              {isFullscreen ? "退出全屏" : "全屏"}
+            </Button>
           </div>
         </div>
 
-        <div ref={wrapRef} style={styles.treeWrap}>
+        <div ref={wrapRef} style={isFullscreen ? styles.treeWrapFullscreen : styles.treeWrap}>
           <div
             ref={contentRef}
             style={{
@@ -813,10 +861,7 @@ export default function App() {
 
             {/* Root */}
             <div style={styles.treeLevel}>
-              <div
-                ref={(el) => setRef("root", el)}
-                style={{ ...styles.nodeCard, ...styles.nodeRoot }}
-              >
+              <div ref={(el) => setRef("root", el)} style={{ ...styles.nodeCard, ...styles.nodeRoot }}>
                 <div style={styles.nodeTitle}>
                   <span style={styles.nodeGlyph}>◎</span>
                   {root.title}
@@ -826,6 +871,7 @@ export default function App() {
                   <span style={styles.nodeMetaLeft}>类型：公司</span>
                   <span style={styles.nodeProgress}>{rootProgress}%</span>
                 </div>
+                <ProgressBar value={Math.min(100, rootProgress)} />
               </div>
             </div>
 
@@ -860,6 +906,7 @@ export default function App() {
                         <span style={styles.nodeMetaLeft}>公司</span>
                         <span style={styles.nodeProgress}>{oProgress}%</span>
                       </div>
+                      <ProgressBar value={Math.min(100, oProgress)} />
                     </div>
                   );
                 })}
@@ -889,10 +936,11 @@ export default function App() {
                           <div style={styles.nodeSubSmall}>负责人：{ownerLabel(k)}</div>
                           <div style={styles.nodeMeta}>
                             <span style={styles.nodeMetaLeft}>
-                              {k.current_value ?? 0}/{k.target_value ?? "-"}
+                              {formatNumber(k.current_value ?? 0)}/{formatNumber(k.target_value ?? 0)}
                             </span>
                             <span style={styles.nodeProgress}>{p}%</span>
                           </div>
+                          <ProgressBar value={Math.min(100, p)} />
                         </div>
                       );
                     })}
@@ -1159,7 +1207,12 @@ export default function App() {
                             </div>
 
                             <div style={styles.krRight}>
-                              <Chip tone={tone}>进度 {progress}%</Chip>
+                              <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 180 }}>
+                                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                  <Chip tone={tone}>进度 {progress}%</Chip>
+                                </div>
+                                <ProgressBar value={Math.min(100, progress)} />
+                              </div>
 
                               <div style={styles.krNums}>
                                 <div style={styles.krNumBlock}>
@@ -1172,7 +1225,7 @@ export default function App() {
                                       onBlur={(e) => updateKRTarget(k.id, e.target.value)}
                                     />
                                   ) : (
-                                    <div style={styles.krNumValue}>{k.target_value ?? "-"}</div>
+                                    <div style={styles.krNumValue}>{formatNumber(k.target_value ?? 0)}</div>
                                   )}
                                 </div>
 
@@ -1186,7 +1239,7 @@ export default function App() {
                                       onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
                                     />
                                   ) : (
-                                    <div style={styles.krNumValue}>{k.current_value ?? 0}</div>
+                                    <div style={styles.krNumValue}>{formatNumber(k.current_value ?? 0)}</div>
                                   )}
                                 </div>
                               </div>
@@ -1514,6 +1567,21 @@ const styles = {
     fontWeight: 800,
   },
 
+  // Progress bar (thin, macOS style)
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    background: "rgba(15,23,42,0.08)",
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: 999,
+    background:
+      "linear-gradient(90deg, rgba(0,122,255,0.95), rgba(175,82,222,0.65), rgba(52,199,89,0.75))",
+    boxShadow: "0 6px 16px rgba(0,122,255,0.16)",
+  },
+
   // O header
   oHeader: {
     display: "flex",
@@ -1564,7 +1632,7 @@ const styles = {
     fontWeight: 800,
   },
 
-  // Compact KR row (about -50% height)
+  // Compact KR row
   krCompactRow: {
     display: "flex",
     justifyContent: "space-between",
@@ -1813,6 +1881,15 @@ const styles = {
     border: "1px solid rgba(15,23,42,0.10)",
     height: "72vh",
   },
+  treeWrapFullscreen: {
+    position: "relative",
+    overflow: "auto",
+    borderRadius: 0,
+    background: "rgba(255,255,255,0.92)",
+    border: "none",
+    width: "100%",
+    height: "100%",
+  },
   treeSvg: {
     position: "absolute",
     inset: 0,
@@ -1880,6 +1957,7 @@ const styles = {
     gap: 10,
     borderTop: "1px solid rgba(15,23,42,0.08)",
     paddingTop: 10,
+    marginBottom: 10,
   },
   nodeMetaLeft: { color: "rgba(11,18,32,0.58)", fontSize: 12, fontWeight: 700 },
   nodeProgress: { fontWeight: 900, color: "rgba(11,18,32,0.85)" },
