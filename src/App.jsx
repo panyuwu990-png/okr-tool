@@ -15,42 +15,50 @@ export default function App() {
   const [rows, setRows] = useState([]);
   const [checkins, setCheckins] = useState([]);
 
+  // New O (collapsed)
+  const [showNewO, setShowNewO] = useState(false);
   const [newOTitle, setNewOTitle] = useState("");
   const [newOMainOwner, setNewOMainOwner] = useState("");
   const [newOError, setNewOError] = useState("");
 
   const [page, setPage] = useState("list"); // "list" | "tree"
-
   const [editingOId, setEditingOId] = useState(null);
 
   const [krDrafts, setKrDrafts] = useState({});
   const [checkinDrafts, setCheckinDrafts] = useState({});
-
   const [checkinModalKr, setCheckinModalKr] = useState(null);
 
   const [menuOpenKey, setMenuOpenKey] = useState(null);
   const menuRootRef = useRef(null);
 
-  // ✅ Futuristic background on body
+  // ---------- Tahoe Light background ----------
   useEffect(() => {
     const prevBg = document.body.style.background;
     const prevColor = document.body.style.color;
-    document.body.style.background =
-      "radial-gradient(1200px 700px at 10% 10%, rgba(88,101,242,0.22), transparent 60%)," +
-      "radial-gradient(900px 600px at 90% 15%, rgba(0,255,209,0.18), transparent 55%)," +
-      "radial-gradient(1000px 700px at 20% 90%, rgba(255,72,196,0.18), transparent 55%)," +
-      "linear-gradient(180deg, #070A16 0%, #070A16 45%, #060816 100%)";
-    document.body.style.color = "#EAF2FF";
+    const prevFont = document.body.style.fontFamily;
+    const prevMargin = document.body.style.margin;
+
     document.body.style.margin = "0";
     document.body.style.fontFamily =
-      "ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, Apple Color Emoji, Segoe UI Emoji";
+      'ui-sans-serif, system-ui, -apple-system, "SF Pro Display","SF Pro Text", Segoe UI, Roboto, Helvetica, Arial';
+
+    // light + subtle aurora
+    document.body.style.background =
+      "radial-gradient(1000px 700px at 15% 10%, rgba(0, 122, 255, 0.10), transparent 60%)," +
+      "radial-gradient(900px 600px at 85% 15%, rgba(175, 82, 222, 0.10), transparent 55%)," +
+      "radial-gradient(900px 700px at 20% 85%, rgba(52, 199, 89, 0.10), transparent 55%)," +
+      "linear-gradient(180deg, #F6F7FB 0%, #F3F5FA 60%, #F6F7FB 100%)";
+    document.body.style.color = "#0B1220";
+
     return () => {
       document.body.style.background = prevBg;
       document.body.style.color = prevColor;
+      document.body.style.fontFamily = prevFont;
+      document.body.style.margin = prevMargin;
     };
   }, []);
 
-  // 点击空白关闭菜单
+  // click outside to close menu
   useEffect(() => {
     function onDocClick(e) {
       if (!menuRootRef.current) return;
@@ -150,7 +158,10 @@ export default function App() {
   const objectives = useMemo(() => {
     const os = rows.filter((r) => r.type === "O");
     const krs = rows.filter((r) => r.type === "KR");
-    return os.map((o) => ({ ...o, krs: krs.filter((k) => k.parent_id === o.id) }));
+    return os.map((o) => ({
+      ...o,
+      krs: krs.filter((k) => k.parent_id === o.id),
+    }));
   }, [rows]);
 
   const checkinsByKr = useMemo(() => {
@@ -233,6 +244,7 @@ export default function App() {
 
     setNewOTitle("");
     setNewOMainOwner("");
+    setShowNewO(false);
     await loadAll();
   }
 
@@ -274,10 +286,10 @@ export default function App() {
 
     if (!title) return setKRDraft(objectiveId, { error: "请填写 KR 描述" });
     if (!Number.isFinite(target) || target <= 0) {
-      return setKRDraft(objectiveId, { error: "目标值必须是 > 0 的数字（例如：26000000）" });
+      return setKRDraft(objectiveId, { error: "目标值必须是 > 0 的数字" });
     }
     if (!Number.isFinite(current) || current < 0) {
-      return setKRDraft(objectiveId, { error: "当前值必须是 ≥ 0 的数字（空则默认 0）" });
+      return setKRDraft(objectiveId, { error: "当前值必须是 ≥ 0 的数字" });
     }
 
     const parentO = objectives.find((x) => x.id === objectiveId);
@@ -349,7 +361,7 @@ export default function App() {
     if (ok) await loadAll();
   }
 
-  // ---------- Check-in Actions ----------
+  // ---------- Check-in ----------
   function setCheckinDraft(krId, patch) {
     setCheckinDrafts((prev) => ({
       ...prev,
@@ -362,7 +374,7 @@ export default function App() {
     const monthFirstDay = ymToFirstDay(d.month);
     const valueNum = safeNumber(d.value);
 
-    if (!monthFirstDay) return setCheckinDraft(kr.id, { error: "请选择月份（例如：2026-01）" });
+    if (!monthFirstDay) return setCheckinDraft(kr.id, { error: "请选择月份" });
     if (!Number.isFinite(valueNum) || valueNum < 0) {
       return setCheckinDraft(kr.id, { error: "复盘值必须是 ≥ 0 的数字" });
     }
@@ -418,13 +430,20 @@ export default function App() {
     await loadAll();
   }
 
-  // ---------- UI Components ----------
-  function Chip({ children, tone = "cyan" }) {
-    const t = tone === "pink" ? styles.chipPink : tone === "violet" ? styles.chipViolet : styles.chipCyan;
+  // ---------- UI ----------
+  function Chip({ children, tone = "gray" }) {
+    const t =
+      tone === "blue"
+        ? styles.chipBlue
+        : tone === "green"
+        ? styles.chipGreen
+        : tone === "violet"
+        ? styles.chipViolet
+        : styles.chipGray;
     return <span style={{ ...styles.chip, ...t }}>{children}</span>;
   }
 
-  function GlowButton({ children, onClick, disabled, variant = "primary", title }) {
+  function Button({ children, onClick, disabled, variant = "primary", title }) {
     const s =
       variant === "ghost"
         ? styles.btnGhost
@@ -490,10 +509,10 @@ export default function App() {
       <div style={styles.modalMask} onMouseDown={onClose}>
         <div style={styles.modal} onMouseDown={(e) => e.stopPropagation()}>
           <div style={styles.modalHeader}>
-            <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>{title}</div>
-            <GlowButton variant="ghost" onClick={onClose} title="关闭">
+            <div style={styles.modalTitle}>{title}</div>
+            <Button variant="ghost" onClick={onClose} title="关闭">
               ✕
-            </GlowButton>
+            </Button>
           </div>
           <div style={styles.modalBody}>{children}</div>
         </div>
@@ -539,9 +558,9 @@ export default function App() {
 
             {draft.error ? <div style={styles.toastErr}>{draft.error}</div> : null}
 
-            <GlowButton onClick={() => addCheckin(kr)} disabled={draft.saving}>
+            <Button onClick={() => addCheckin(kr)} disabled={draft.saving}>
               {draft.saving ? "记录中..." : "记录本月复盘"}
-            </GlowButton>
+            </Button>
           </>
         ) : (
           <div style={styles.muted}>
@@ -549,14 +568,14 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 14 }}>
           <div style={styles.sectionTitle}>历史复盘</div>
 
           {history.length ? (
             <div style={{ marginTop: 10 }}>
               {history.map((h) => (
                 <div key={h.id} style={styles.checkinRow}>
-                  <div style={{ width: 88 }}>
+                  <div style={{ width: 92 }}>
                     <Chip tone="violet">{String(h.month).slice(0, 7)}</Chip>
                   </div>
 
@@ -569,7 +588,7 @@ export default function App() {
                       {h.note ? (
                         <div style={{ maxWidth: 640 }}>
                           <span style={styles.muted}>备注：</span>
-                          <span style={{ color: "#DCE7FF" }}>{h.note}</span>
+                          <span>{h.note}</span>
                         </div>
                       ) : null}
                     </div>
@@ -615,7 +634,7 @@ export default function App() {
     );
   }
 
-  // ---------- Tree View (with Zoom) ----------
+  // ---------- Tree View (Zoom, Light style) ----------
   function TreeView({ objectives }) {
     const wrapRef = useRef(null);
     const contentRef = useRef(null);
@@ -690,10 +709,7 @@ export default function App() {
         const isZoomGesture = e.ctrlKey || e.metaKey;
         if (!isZoomGesture) return;
         e.preventDefault();
-        setScale((s) => {
-          const next = clamp(s + (e.deltaY > 0 ? -0.08 : 0.08), 0.5, 2.0);
-          return round2(next);
-        });
+        setScale((s) => clamp(round2(s + (e.deltaY > 0 ? -0.08 : 0.08)), 0.55, 2.0));
       }
 
       el.addEventListener("wheel", onWheel, { passive: false });
@@ -706,12 +722,11 @@ export default function App() {
     function round2(n) {
       return Math.round(n * 100) / 100;
     }
-
     function zoomIn() {
-      setScale((s) => round2(clamp(s + 0.1, 0.5, 2.0)));
+      setScale((s) => clamp(round2(s + 0.1), 0.55, 2.0));
     }
     function zoomOut() {
-      setScale((s) => round2(clamp(s - 0.1, 0.5, 2.0)));
+      setScale((s) => clamp(round2(s - 0.1), 0.55, 2.0));
     }
     function resetZoom() {
       setScale(1);
@@ -731,7 +746,7 @@ export default function App() {
         const availH = wr.height - padding;
         const ratioW = availW / cr.width;
         const ratioH = availH / cr.height;
-        const next = round2(clamp(Math.min(ratioW, ratioH), 0.5, 2.0));
+        const next = clamp(round2(Math.min(ratioW, ratioH)), 0.55, 2.0);
         setScale(next);
         requestAnimationFrame(() => wrap.scrollTo({ top: 0, left: 0, behavior: "smooth" }));
       });
@@ -750,26 +765,24 @@ export default function App() {
       <div style={styles.panel}>
         <div style={styles.treeTopBar}>
           <div>
-            <div style={styles.h3}>目标关系树</div>
-            <div style={styles.muted}>
-              提示：按住 Ctrl/⌘ + 滚轮缩放；点击 KR 卡片可打开复盘。
-            </div>
+            <div style={styles.h3}>关系树</div>
+            <div style={styles.muted}>Ctrl/⌘ + 滚轮缩放；点击 KR 可打开复盘</div>
           </div>
 
           <div style={styles.zoomBar}>
-            <GlowButton variant="soft" onClick={zoomOut}>
+            <Button variant="soft" onClick={zoomOut}>
               －
-            </GlowButton>
-            <Chip tone="cyan">{Math.round(scale * 100)}%</Chip>
-            <GlowButton variant="soft" onClick={zoomIn}>
+            </Button>
+            <Chip tone="blue">{Math.round(scale * 100)}%</Chip>
+            <Button variant="soft" onClick={zoomIn}>
               ＋
-            </GlowButton>
-            <GlowButton variant="ghost" onClick={fitZoom}>
+            </Button>
+            <Button variant="ghost" onClick={fitZoom}>
               适配
-            </GlowButton>
-            <GlowButton variant="ghost" onClick={resetZoom}>
+            </Button>
+            <Button variant="ghost" onClick={resetZoom}>
               重置
-            </GlowButton>
+            </Button>
           </div>
         </div>
 
@@ -792,7 +805,7 @@ export default function App() {
                   y1={ln.y1}
                   x2={ln.x2}
                   y2={ln.y2}
-                  stroke="rgba(155, 255, 235, 0.35)"
+                  stroke="rgba(35, 46, 65, 0.18)"
                   strokeWidth="2"
                 />
               ))}
@@ -805,19 +818,19 @@ export default function App() {
                 style={{ ...styles.nodeCard, ...styles.nodeRoot }}
               >
                 <div style={styles.nodeTitle}>
-                  <span style={styles.nodeGlyph}>⟡</span>
+                  <span style={styles.nodeGlyph}>◎</span>
                   {root.title}
                 </div>
                 <div style={styles.nodeSubSmall}>负责人：{ownerLabel(root)}</div>
                 <div style={styles.nodeMeta}>
-                  <span style={{ color: "rgba(234,242,255,0.72)" }}>类型：公司</span>
+                  <span style={styles.nodeMetaLeft}>类型：公司</span>
                   <span style={styles.nodeProgress}>{rootProgress}%</span>
                 </div>
               </div>
             </div>
 
             {/* O Level */}
-            <div style={{ ...styles.treeLevel, marginTop: 26 }}>
+            <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
                 {objectives.map((o, idx) => {
                   const oProgress =
@@ -838,13 +851,13 @@ export default function App() {
                       title={o.title}
                     >
                       <div style={styles.nodeTitle}>
-                        <span style={styles.nodeGlyph}>◈</span>
+                        <span style={styles.nodeGlyph}>O</span>
                         {`O${idx + 1}`}
                       </div>
                       <div style={styles.nodeSub}>{o.title}</div>
                       <div style={styles.nodeSubSmall}>负责人：{ownerLabel(o)}</div>
                       <div style={styles.nodeMeta}>
-                        <span style={{ color: "rgba(234,242,255,0.72)" }}>类型：公司</span>
+                        <span style={styles.nodeMetaLeft}>公司</span>
                         <span style={styles.nodeProgress}>{oProgress}%</span>
                       </div>
                     </div>
@@ -854,7 +867,7 @@ export default function App() {
             </div>
 
             {/* KR Level */}
-            <div style={{ ...styles.treeLevel, marginTop: 26 }}>
+            <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
                 {objectives.map((o) => (
                   <div key={o.id} style={styles.krCol}>
@@ -869,13 +882,13 @@ export default function App() {
                           title="点击打开复盘"
                         >
                           <div style={styles.nodeTitle}>
-                            <span style={styles.nodeGlyph}>⟢</span>
+                            <span style={styles.nodeGlyph}>K</span>
                             {`KR${kIdx + 1}`}
                           </div>
                           <div style={styles.nodeSub}>{k.title}</div>
                           <div style={styles.nodeSubSmall}>负责人：{ownerLabel(k)}</div>
                           <div style={styles.nodeMeta}>
-                            <span style={{ color: "rgba(234,242,255,0.70)" }}>
+                            <span style={styles.nodeMetaLeft}>
                               {k.current_value ?? 0}/{k.target_value ?? "-"}
                             </span>
                             <span style={styles.nodeProgress}>{p}%</span>
@@ -888,15 +901,12 @@ export default function App() {
               </div>
             </div>
           </div>
-
-          {/* Subtle scanline overlay */}
-          <div style={styles.scanlines} />
         </div>
       </div>
     );
   }
 
-  // ---------- UI ----------
+  // ---------- Auth Page ----------
   if (!session) {
     return (
       <div style={styles.center}>
@@ -905,7 +915,7 @@ export default function App() {
             <div style={styles.brandMark} />
             <div>
               <div style={styles.brandTitle}>OKR Nexus</div>
-              <div style={styles.brandSub}>未来感 OKR 协作与复盘系统</div>
+              <div style={styles.brandSub}>轻量 · 专注 · Tahoe 风格</div>
             </div>
           </div>
 
@@ -921,9 +931,9 @@ export default function App() {
             onChange={(e) => setEmail(e.target.value)}
           />
 
-          <GlowButton onClick={signIn} disabled={authSending}>
+          <Button onClick={signIn} disabled={authSending}>
             {authSending ? "发送中..." : "发送登录链接"}
-          </GlowButton>
+          </Button>
 
           <div style={{ marginTop: 12, ...styles.muted }}>
             * 若没收到邮件，请检查垃圾箱或稍后重试
@@ -933,6 +943,7 @@ export default function App() {
     );
   }
 
+  // ---------- Main ----------
   return (
     <div style={styles.container} ref={menuRootRef}>
       {/* Top Nav */}
@@ -961,58 +972,69 @@ export default function App() {
             </button>
           </div>
 
-          <GlowButton variant="ghost" onClick={signOut}>
+          <Button variant="ghost" onClick={signOut}>
             退出
-          </GlowButton>
+          </Button>
         </div>
       </div>
 
-      {/* Content */}
+      {/* Tree Page */}
       {page === "tree" ? (
         <TreeView objectives={objectives} />
       ) : (
         <>
-          {/* Create O */}
+          {/* New Objective (Collapsed) */}
           <div style={styles.panel}>
-            <div style={styles.panelHeader}>
+            <div style={styles.panelHeaderRow}>
               <div>
-                <div style={styles.h3}>新增 Objective</div>
+                <div style={styles.h3}>Objective</div>
                 <div style={styles.muted}>建议：一条 O 配 2–4 条可量化 KR</div>
               </div>
+
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {loading ? <Chip tone="violet">同步中</Chip> : <Chip>在线</Chip>}
+                {loading ? <Chip tone="violet">同步中</Chip> : <Chip tone="gray">在线</Chip>}
+                <Button
+                  variant={showNewO ? "soft" : "primary"}
+                  onClick={() => setShowNewO((v) => !v)}
+                >
+                  {showNewO ? "收起" : "＋ 新建 Objective"}
+                </Button>
               </div>
             </div>
 
-            <div style={styles.formRow}>
-              <div style={{ flex: 2 }}>
-                <div style={styles.label}>Objective</div>
-                <input
-                  style={styles.input}
-                  placeholder="例如：打造稳定可复制的电商增长引擎，实现高质量盈利"
-                  value={newOTitle}
-                  onChange={(e) => setNewOTitle(e.target.value)}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={styles.label}>主要负责人</div>
-                <input
-                  style={styles.input}
-                  placeholder="例如：张三"
-                  value={newOMainOwner}
-                  onChange={(e) => setNewOMainOwner(e.target.value)}
-                />
-              </div>
-            </div>
+            {showNewO ? (
+              <div style={{ marginTop: 12 }}>
+                <div style={styles.formRow}>
+                  <div style={{ flex: 2 }}>
+                    <div style={styles.label}>Objective</div>
+                    <input
+                      style={styles.input}
+                      placeholder="例如：打造稳定可复制的电商增长引擎，实现高质量盈利"
+                      value={newOTitle}
+                      onChange={(e) => setNewOTitle(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={styles.label}>主要负责人</div>
+                    <input
+                      style={styles.input}
+                      placeholder="例如：张三"
+                      value={newOMainOwner}
+                      onChange={(e) => setNewOMainOwner(e.target.value)}
+                    />
+                  </div>
+                </div>
 
-            {newOError ? <div style={styles.toastErr}>{newOError}</div> : null}
+                {newOError ? <div style={styles.toastErr}>{newOError}</div> : null}
 
-            <GlowButton onClick={addObjective} disabled={loading}>
-              {loading ? "处理中..." : "新增 O"}
-            </GlowButton>
+                <Button onClick={addObjective} disabled={loading}>
+                  {loading ? "处理中..." : "创建 Objective"}
+                </Button>
+              </div>
+            ) : null}
           </div>
 
-          {/* List */}
+          {/* Objectives List */}
           {objectives.map((o, idx) => {
             const isEditing = editingOId === o.id;
             const krDraft =
@@ -1029,8 +1051,8 @@ export default function App() {
               <div key={o.id} style={styles.panel}>
                 {/* O Header */}
                 <div style={styles.oHeader}>
-                  <div>
-                    <div style={styles.oTitle}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={styles.oTitleRow}>
                       <span style={styles.oIndex}>{`O${idx + 1}`}</span>
                       {isEditing ? (
                         <input
@@ -1039,12 +1061,12 @@ export default function App() {
                           onBlur={(e) => updateTitle(o.id, e.target.value)}
                         />
                       ) : (
-                        <span style={{ marginLeft: 10 }}>{o.title}</span>
+                        <span style={styles.oTitleText}>{o.title}</span>
                       )}
                     </div>
 
-                    <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <Chip tone="violet">负责人：{ownerLabel(o)}</Chip>
+                    <div style={styles.oMetaRow}>
+                      <Chip tone="gray">负责人：{ownerLabel(o)}</Chip>
                       {isEditing ? (
                         <span style={styles.muted}>（编辑负责人：输入后点空白处保存）</span>
                       ) : null}
@@ -1064,7 +1086,7 @@ export default function App() {
                   </div>
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                    <GlowButton
+                    <Button
                       variant={isEditing ? "soft" : "primary"}
                       onClick={() => {
                         setMenuOpenKey(null);
@@ -1075,7 +1097,7 @@ export default function App() {
                       }}
                     >
                       {isEditing ? "完成" : "修改"}
-                    </GlowButton>
+                    </Button>
 
                     {isEditing ? (
                       <MoreMenu
@@ -1092,119 +1114,122 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* KR List */}
-                {o.krs.length ? (
-                  <div style={{ marginTop: 16 }}>
-                    <div style={styles.sectionTitle}>关键结果 KR</div>
+                {/* KR Compact List */}
+                <div style={{ marginTop: 12 }}>
+                  <div style={styles.sectionTitle}>KR</div>
 
-                    <div style={{ marginTop: 10 }}>
+                  {o.krs.length ? (
+                    <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                       {o.krs.map((k, kIdx) => {
                         const progress = calcProgress(k.current_value, k.target_value);
-                        const tone = progress >= 80 ? "cyan" : progress >= 40 ? "violet" : "pink";
+
+                        const tone =
+                          progress >= 80 ? "green" : progress >= 40 ? "blue" : "violet";
 
                         return (
-                          <div key={k.id} style={styles.krRow}>
-                            <div style={styles.krHeader}>
-                              <div style={styles.krTitle}>
-                                <span style={styles.krIndex}>{`KR${kIdx + 1}`}</span>
+                          <div key={k.id} style={styles.krCompactRow}>
+                            <div style={styles.krLeft}>
+                              <span style={styles.krBadge}>{`KR${kIdx + 1}`}</span>
+                              <div style={{ minWidth: 0 }}>
                                 {isEditing ? (
                                   <input
-                                    style={styles.titleInputSmall}
+                                    style={styles.krTitleInput}
                                     defaultValue={k.title}
                                     onBlur={(e) => updateTitle(k.id, e.target.value)}
                                   />
                                 ) : (
-                                  <span style={{ marginLeft: 10 }}>{k.title}</span>
+                                  <div style={styles.krTitleText} title={k.title}>
+                                    {k.title}
+                                  </div>
                                 )}
-                              </div>
-
-                              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                                <Chip tone={tone}>进度 {progress}%</Chip>
-
-                                <GlowButton
-                                  variant="ghost"
-                                  onClick={() => {
-                                    setMenuOpenKey(null);
-                                    setCheckinModalKr({ kr: k, isEditing });
-                                  }}
-                                >
-                                  复盘
-                                </GlowButton>
-
-                                {isEditing ? (
-                                  <MoreMenu
-                                    menuKey={`kr:${k.id}`}
-                                    items={[
-                                      {
-                                        label: "删除 KR",
-                                        danger: true,
-                                        onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
-                                      },
-                                    ]}
-                                  />
-                                ) : null}
+                                <div style={styles.krSubLine}>
+                                  <span style={styles.krSubLabel}>负责人：</span>
+                                  {isEditing ? (
+                                    <input
+                                      style={styles.krMiniInput}
+                                      defaultValue={k.main_owner || ""}
+                                      placeholder="姓名"
+                                      onBlur={(e) => updateMainOwner(k.id, e.target.value)}
+                                    />
+                                  ) : (
+                                    <span style={styles.krSubValue}>{ownerLabel(k)}</span>
+                                  )}
+                                </div>
                               </div>
                             </div>
 
-                            {/* KR Meta */}
-                            <div style={styles.krMetaGrid}>
-                              <div>
-                                <div style={styles.label}>主要负责人</div>
-                                {isEditing ? (
-                                  <input
-                                    style={styles.input}
-                                    defaultValue={k.main_owner || ""}
-                                    placeholder="例如：李四"
-                                    onBlur={(e) => updateMainOwner(k.id, e.target.value)}
-                                  />
-                                ) : (
-                                  <div style={styles.metaValue}>{ownerLabel(k)}</div>
-                                )}
+                            <div style={styles.krRight}>
+                              <Chip tone={tone}>进度 {progress}%</Chip>
+
+                              <div style={styles.krNums}>
+                                <div style={styles.krNumBlock}>
+                                  <div style={styles.krNumLabel}>目标</div>
+                                  {isEditing ? (
+                                    <input
+                                      style={styles.krNumInput}
+                                      type="number"
+                                      defaultValue={k.target_value ?? 0}
+                                      onBlur={(e) => updateKRTarget(k.id, e.target.value)}
+                                    />
+                                  ) : (
+                                    <div style={styles.krNumValue}>{k.target_value ?? "-"}</div>
+                                  )}
+                                </div>
+
+                                <div style={styles.krNumBlock}>
+                                  <div style={styles.krNumLabel}>当前</div>
+                                  {isEditing ? (
+                                    <input
+                                      style={styles.krNumInput}
+                                      type="number"
+                                      defaultValue={k.current_value ?? 0}
+                                      onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
+                                    />
+                                  ) : (
+                                    <div style={styles.krNumValue}>{k.current_value ?? 0}</div>
+                                  )}
+                                </div>
                               </div>
 
-                              <div>
-                                <div style={styles.label}>目标值</div>
-                                {isEditing ? (
-                                  <input
-                                    style={styles.input}
-                                    type="number"
-                                    defaultValue={k.target_value ?? 0}
-                                    onBlur={(e) => updateKRTarget(k.id, e.target.value)}
-                                  />
-                                ) : (
-                                  <div style={styles.metaValue}>{k.target_value ?? "-"}</div>
-                                )}
-                              </div>
+                              <Button
+                                variant="ghost"
+                                onClick={() => {
+                                  setMenuOpenKey(null);
+                                  setCheckinModalKr({ kr: k, isEditing });
+                                }}
+                              >
+                                复盘
+                              </Button>
 
-                              <div>
-                                <div style={styles.label}>当前值</div>
-                                {isEditing ? (
-                                  <input
-                                    style={styles.input}
-                                    type="number"
-                                    defaultValue={k.current_value ?? 0}
-                                    onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
-                                  />
-                                ) : (
-                                  <div style={styles.metaValue}>{k.current_value ?? 0}</div>
-                                )}
-                              </div>
+                              {isEditing ? (
+                                <MoreMenu
+                                  menuKey={`kr:${k.id}`}
+                                  items={[
+                                    {
+                                      label: "删除 KR",
+                                      danger: true,
+                                      onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
+                                    },
+                                  ]}
+                                />
+                              ) : null}
                             </div>
                           </div>
                         );
                       })}
                     </div>
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 14, ...styles.muted }}>
-                    还没有 KR，建议先拆 2–4 个可量化的关键结果。
-                  </div>
-                )}
+                  ) : (
+                    <div style={{ marginTop: 10, ...styles.muted }}>
+                      还没有 KR（建议先拆 2–4 条可量化 KR）
+                    </div>
+                  )}
+                </div>
 
-                {/* Add KR */}
+                {/* Add KR (only in edit mode) */}
                 {isEditing ? (
-                  <div style={{ marginTop: 18, ...styles.subPanel }}>
+                  <div style={{ marginTop: 14, ...styles.subPanel }}>
                     <div style={styles.sectionTitle}>新增 KR</div>
+
                     <div style={{ marginTop: 10 }}>
                       <div style={styles.formRow}>
                         <div style={{ flex: 2 }}>
@@ -1252,9 +1277,9 @@ export default function App() {
 
                       {krDraft.error ? <div style={styles.toastErr}>{krDraft.error}</div> : null}
 
-                      <GlowButton onClick={() => addKR(o.id)} disabled={krDraft.saving}>
+                      <Button onClick={() => addKR(o.id)} disabled={krDraft.saving}>
                         {krDraft.saving ? "新增中..." : "新增 KR"}
-                      </GlowButton>
+                      </Button>
                     </div>
                   </div>
                 ) : null}
@@ -1264,7 +1289,7 @@ export default function App() {
         </>
       )}
 
-      {/* Modal */}
+      {/* Checkin Modal */}
       <Modal
         open={!!checkinModalKr}
         title={
@@ -1292,63 +1317,58 @@ export default function App() {
         ) : null}
       </Modal>
 
-      {/* Footer vibe */}
       <div style={styles.footer}>
-        <span style={{ opacity: 0.75 }}>OKR Nexus</span>
-        <span style={{ opacity: 0.55 }}>·</span>
-        <span style={{ opacity: 0.65 }}>Futuristic UI</span>
+        <span style={{ opacity: 0.7 }}>OKR Nexus</span>
+        <span style={{ opacity: 0.35 }}>·</span>
+        <span style={{ opacity: 0.55 }}>Tahoe Light UI</span>
       </div>
     </div>
   );
 }
 
-/* ----------------------------- FUTURE UI STYLES ----------------------------- */
+/* ----------------------------- Tahoe Light Styles ----------------------------- */
 const styles = {
   container: {
     maxWidth: 1180,
-    margin: "28px auto",
-    padding: "0 16px 40px",
+    margin: "22px auto",
+    padding: "0 16px 36px",
   },
 
-  // Topbar
+  // Topbar (light glass)
   topbar: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
     gap: 12,
-    padding: 16,
+    padding: 14,
     borderRadius: 18,
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
-    border: "1px solid rgba(155, 255, 235, 0.18)",
-    boxShadow:
-      "0 14px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(138,180,255,0.08) inset",
-    backdropFilter: "blur(10px)",
+    background: "rgba(255,255,255,0.72)",
+    border: "1px solid rgba(15,23,42,0.10)",
+    boxShadow: "0 10px 30px rgba(15,23,42,0.08)",
+    backdropFilter: "blur(14px)",
     position: "sticky",
-    top: 14,
+    top: 12,
     zIndex: 5,
   },
   logoOrb: {
-    width: 38,
-    height: 38,
+    width: 36,
+    height: 36,
     borderRadius: 14,
     background:
-      "radial-gradient(circle at 30% 30%, rgba(0,255,209,0.9), rgba(88,101,242,0.85) 45%, rgba(255,72,196,0.45) 80%)",
-    boxShadow:
-      "0 0 24px rgba(0,255,209,0.22), 0 0 34px rgba(88,101,242,0.25)",
-    border: "1px solid rgba(255,255,255,0.18)",
+      "radial-gradient(circle at 30% 30%, rgba(0,122,255,0.9), rgba(175,82,222,0.75) 55%, rgba(52,199,89,0.55) 100%)",
+    boxShadow: "0 10px 20px rgba(0,122,255,0.15)",
+    border: "1px solid rgba(15,23,42,0.08)",
   },
   appTitle: {
-    fontWeight: 900,
-    letterSpacing: 0.3,
-    fontSize: 18,
-    color: "#EAF2FF",
-    textShadow: "0 0 18px rgba(88,101,242,0.20)",
+    fontWeight: 800,
+    letterSpacing: 0.2,
+    fontSize: 16,
+    color: "#0B1220",
   },
   appSub: {
     marginTop: 2,
     fontSize: 12,
-    color: "rgba(234,242,255,0.65)",
+    color: "rgba(11,18,32,0.55)",
   },
 
   tabs: {
@@ -1356,273 +1376,307 @@ const styles = {
     gap: 6,
     padding: 6,
     borderRadius: 14,
-    background: "rgba(255,255,255,0.04)",
-    border: "1px solid rgba(155, 255, 235, 0.14)",
-    boxShadow: "0 0 0 1px rgba(88,101,242,0.07) inset",
+    background: "rgba(15,23,42,0.04)",
+    border: "1px solid rgba(15,23,42,0.08)",
   },
   tab: {
-    padding: "10px 12px",
+    padding: "8px 12px",
     borderRadius: 12,
     border: "1px solid transparent",
     background: "transparent",
     cursor: "pointer",
-    fontWeight: 800,
-    color: "rgba(234,242,255,0.72)",
+    fontWeight: 700,
+    color: "rgba(11,18,32,0.70)",
   },
   tabActive: {
-    padding: "10px 12px",
+    padding: "8px 12px",
     borderRadius: 12,
     cursor: "pointer",
-    fontWeight: 900,
-    color: "#061024",
-    border: "1px solid rgba(0,255,209,0.45)",
-    background:
-      "linear-gradient(90deg, rgba(0,255,209,0.95), rgba(88,101,242,0.95))",
-    boxShadow:
-      "0 10px 22px rgba(0,255,209,0.14), 0 10px 22px rgba(88,101,242,0.14)",
+    fontWeight: 800,
+    color: "#0B1220",
+    border: "1px solid rgba(0,122,255,0.18)",
+    background: "rgba(0,122,255,0.10)",
   },
 
-  // Panels (glass cards)
+  // Panels
   panel: {
-    marginTop: 16,
+    marginTop: 14,
     borderRadius: 18,
-    padding: 16,
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03))",
-    border: "1px solid rgba(155, 255, 235, 0.16)",
-    boxShadow:
-      "0 18px 50px rgba(0,0,0,0.50), 0 0 0 1px rgba(138,180,255,0.08) inset",
-    backdropFilter: "blur(10px)",
+    padding: 14,
+    background: "rgba(255,255,255,0.78)",
+    border: "1px solid rgba(15,23,42,0.10)",
+    boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
+    backdropFilter: "blur(14px)",
   },
   subPanel: {
     borderRadius: 16,
-    padding: 14,
-    background: "rgba(8, 12, 28, 0.35)",
-    border: "1px dashed rgba(155, 255, 235, 0.22)",
+    padding: 12,
+    background: "rgba(15,23,42,0.02)",
+    border: "1px dashed rgba(15,23,42,0.14)",
   },
-  panelHeader: {
+  panelHeaderRow: {
     display: "flex",
     justifyContent: "space-between",
-    gap: 10,
-    alignItems: "flex-start",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
   },
 
   // Typography
   h3: {
-    fontWeight: 900,
-    fontSize: 16,
-    letterSpacing: 0.25,
-    marginBottom: 4,
+    fontWeight: 800,
+    fontSize: 15,
+    margin: 0,
   },
   sectionTitle: {
-    fontWeight: 900,
-    letterSpacing: 0.2,
-    color: "rgba(234,242,255,0.92)",
+    fontWeight: 800,
+    color: "rgba(11,18,32,0.92)",
   },
   muted: {
-    color: "rgba(234,242,255,0.62)",
+    color: "rgba(11,18,32,0.56)",
     fontSize: 12,
   },
 
   // Inputs
   label: {
     fontSize: 12,
-    color: "rgba(234,242,255,0.65)",
+    color: "rgba(11,18,32,0.62)",
     marginBottom: 6,
-    letterSpacing: 0.2,
   },
   input: {
     width: "100%",
-    padding: "11px 12px",
-    borderRadius: 14,
-    border: "1px solid rgba(155, 255, 235, 0.16)",
-    background: "rgba(8, 12, 28, 0.55)",
-    color: "#EAF2FF",
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.12)",
+    background: "rgba(255,255,255,0.85)",
+    color: "#0B1220",
     outline: "none",
-    boxShadow: "0 0 0 1px rgba(88,101,242,0.08) inset",
+    boxShadow: "0 1px 0 rgba(15,23,42,0.03) inset",
   },
   inlineInput: {
     width: 140,
-    padding: "9px 10px",
-    borderRadius: 14,
-    border: "1px solid rgba(155, 255, 235, 0.16)",
-    background: "rgba(8, 12, 28, 0.55)",
-    color: "#EAF2FF",
+    padding: "8px 10px",
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.12)",
+    background: "rgba(255,255,255,0.85)",
+    color: "#0B1220",
     outline: "none",
   },
 
-  // Buttons
+  // Buttons (Tahoe)
   btnBase: {
-    border: "none",
-    borderRadius: 14,
-    padding: "10px 14px",
-    fontWeight: 900,
-    letterSpacing: 0.2,
-    transition: "transform 120ms ease, filter 120ms ease",
+    border: "1px solid transparent",
+    borderRadius: 12,
+    padding: "10px 12px",
+    fontWeight: 800,
+    transition: "transform 100ms ease, box-shadow 120ms ease",
   },
   btnPrimary: {
-    color: "#061024",
-    background:
-      "linear-gradient(90deg, rgba(0,255,209,0.95), rgba(88,101,242,0.95), rgba(255,72,196,0.70))",
-    boxShadow:
-      "0 16px 30px rgba(0,255,209,0.12), 0 16px 30px rgba(88,101,242,0.16), 0 0 0 1px rgba(255,255,255,0.10) inset",
+    color: "#ffffff",
+    background: "linear-gradient(180deg, rgba(0,122,255,0.95), rgba(0,122,255,0.78))",
+    boxShadow: "0 10px 18px rgba(0,122,255,0.18)",
   },
   btnSoft: {
-    color: "#EAF2FF",
-    background: "rgba(255,255,255,0.06)",
-    border: "1px solid rgba(155, 255, 235, 0.18)",
-    boxShadow: "0 0 0 1px rgba(88,101,242,0.08) inset",
+    color: "#0B1220",
+    background: "rgba(15,23,42,0.06)",
+    border: "1px solid rgba(15,23,42,0.10)",
   },
   btnGhost: {
-    color: "rgba(234,242,255,0.88)",
-    background: "rgba(8, 12, 28, 0.30)",
-    border: "1px solid rgba(155, 255, 235, 0.14)",
-    boxShadow: "0 0 0 1px rgba(88,101,242,0.06) inset",
+    color: "#0B1220",
+    background: "rgba(255,255,255,0.65)",
+    border: "1px solid rgba(15,23,42,0.10)",
   },
 
   // Chips
   chip: {
     display: "inline-flex",
     alignItems: "center",
-    gap: 6,
     padding: "6px 10px",
     borderRadius: 999,
-    fontWeight: 900,
+    fontWeight: 800,
     fontSize: 12,
-    letterSpacing: 0.2,
-    border: "1px solid rgba(255,255,255,0.10)",
-    background: "rgba(255,255,255,0.06)",
-    boxShadow: "0 0 0 1px rgba(88,101,242,0.06) inset",
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(255,255,255,0.75)",
   },
-  chipCyan: {
-    border: "1px solid rgba(0,255,209,0.28)",
-    boxShadow: "0 0 18px rgba(0,255,209,0.08)",
-    color: "rgba(234,242,255,0.92)",
-  },
-  chipViolet: {
-    border: "1px solid rgba(88,101,242,0.30)",
-    boxShadow: "0 0 18px rgba(88,101,242,0.10)",
-    color: "rgba(234,242,255,0.92)",
-  },
-  chipPink: {
-    border: "1px solid rgba(255,72,196,0.26)",
-    boxShadow: "0 0 18px rgba(255,72,196,0.08)",
-    color: "rgba(234,242,255,0.92)",
-  },
+  chipGray: { color: "rgba(11,18,32,0.78)" },
+  chipBlue: { color: "#0A66FF", background: "rgba(0,122,255,0.10)", border: "1px solid rgba(0,122,255,0.18)" },
+  chipGreen: { color: "#0E7A2A", background: "rgba(52,199,89,0.10)", border: "1px solid rgba(52,199,89,0.18)" },
+  chipViolet: { color: "#6E3BC6", background: "rgba(175,82,222,0.10)", border: "1px solid rgba(175,82,222,0.18)" },
 
-  // Toast / errors
   toastErr: {
     marginTop: 10,
     marginBottom: 10,
     padding: "10px 12px",
-    borderRadius: 14,
-    background: "rgba(255, 72, 196, 0.10)",
-    border: "1px solid rgba(255, 72, 196, 0.26)",
-    color: "#FFD6F0",
-    boxShadow: "0 0 26px rgba(255,72,196,0.12)",
+    borderRadius: 12,
+    background: "rgba(255, 59, 48, 0.10)",
+    border: "1px solid rgba(255, 59, 48, 0.18)",
+    color: "rgba(150, 20, 20, 0.95)",
     fontWeight: 800,
   },
 
-  // O / KR blocks
+  // O header
   oHeader: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "flex-start",
     gap: 12,
   },
-  oTitle: {
+  oTitleRow: {
     display: "flex",
     alignItems: "center",
     gap: 10,
-    fontWeight: 900,
-    fontSize: 16,
-    letterSpacing: 0.2,
+    minWidth: 0,
   },
   oIndex: {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 46,
+    minWidth: 44,
     padding: "6px 10px",
-    borderRadius: 14,
-    background:
-      "linear-gradient(90deg, rgba(88,101,242,0.85), rgba(0,255,209,0.75))",
-    color: "#061024",
-    boxShadow: "0 0 22px rgba(88,101,242,0.16)",
+    borderRadius: 12,
+    background: "rgba(0,122,255,0.12)",
+    border: "1px solid rgba(0,122,255,0.18)",
+    color: "#0B1220",
+    fontWeight: 900,
+  },
+  oTitleText: {
+    fontWeight: 800,
+    fontSize: 16,
+    color: "#0B1220",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  oMetaRow: {
+    marginTop: 10,
+    display: "flex",
+    gap: 10,
+    alignItems: "center",
+    flexWrap: "wrap",
   },
   titleInput: {
-    width: 560,
-    maxWidth: "70vw",
+    width: "min(680px, 70vw)",
     padding: "9px 10px",
-    borderRadius: 14,
-    border: "1px solid rgba(155, 255, 235, 0.18)",
-    background: "rgba(8, 12, 28, 0.55)",
-    color: "#EAF2FF",
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.12)",
+    background: "rgba(255,255,255,0.90)",
     outline: "none",
-    marginLeft: 8,
-    fontWeight: 900,
-  },
-  titleInputSmall: {
-    width: 520,
-    maxWidth: "66vw",
-    padding: "9px 10px",
-    borderRadius: 14,
-    border: "1px solid rgba(155, 255, 235, 0.18)",
-    background: "rgba(8, 12, 28, 0.55)",
-    color: "#EAF2FF",
-    outline: "none",
-    marginLeft: 8,
-    fontWeight: 900,
+    fontWeight: 800,
   },
 
-  krRow: {
-    marginTop: 12,
-    borderRadius: 18,
-    padding: 14,
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03))",
-    border: "1px solid rgba(88,101,242,0.18)",
-    boxShadow:
-      "0 14px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(0,255,209,0.06) inset",
-  },
-  krHeader: {
+  // Compact KR row (about -50% height)
+  krCompactRow: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "center",
     gap: 12,
+    padding: "10px 10px",
+    borderRadius: 16,
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(255,255,255,0.70)",
   },
-  krTitle: {
+  krLeft: {
     display: "flex",
-    alignItems: "center",
-    fontWeight: 900,
-    letterSpacing: 0.2,
+    gap: 10,
+    alignItems: "flex-start",
+    minWidth: 0,
+    flex: 1.3,
   },
-  krIndex: {
+  krBadge: {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 56,
-    padding: "6px 10px",
-    borderRadius: 14,
-    background: "rgba(0,255,209,0.12)",
-    border: "1px solid rgba(0,255,209,0.22)",
-    color: "#CFFFF3",
-    boxShadow: "0 0 18px rgba(0,255,209,0.08)",
+    minWidth: 54,
+    height: 28,
+    padding: "0 10px",
+    borderRadius: 999,
+    background: "rgba(15,23,42,0.06)",
+    border: "1px solid rgba(15,23,42,0.10)",
+    fontWeight: 900,
+    color: "rgba(11,18,32,0.85)",
   },
-
-  krMetaGrid: {
-    marginTop: 12,
-    display: "grid",
-    gridTemplateColumns: "1.2fr 1fr 1fr",
-    gap: 12,
-  },
-  metaValue: {
-    padding: "10px 12px",
-    borderRadius: 14,
-    background: "rgba(8, 12, 28, 0.38)",
-    border: "1px solid rgba(155, 255, 235, 0.12)",
-    color: "#EAF2FF",
+  krTitleText: {
     fontWeight: 800,
+    color: "#0B1220",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: 520,
+  },
+  krTitleInput: {
+    width: "min(560px, 52vw)",
+    padding: "7px 10px",
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.12)",
+    background: "rgba(255,255,255,0.90)",
+    outline: "none",
+    fontWeight: 800,
+  },
+  krSubLine: {
+    marginTop: 6,
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  krSubLabel: {
+    fontSize: 12,
+    color: "rgba(11,18,32,0.55)",
+    fontWeight: 700,
+  },
+  krSubValue: {
+    fontSize: 12,
+    color: "rgba(11,18,32,0.78)",
+    fontWeight: 800,
+  },
+  krMiniInput: {
+    width: 120,
+    padding: "6px 8px",
+    borderRadius: 10,
+    border: "1px solid rgba(15,23,42,0.12)",
+    background: "rgba(255,255,255,0.90)",
+    outline: "none",
+    fontSize: 12,
+    fontWeight: 800,
+  },
+  krRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+  },
+  krNums: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+  },
+  krNumBlock: {
+    minWidth: 92,
+    padding: "6px 10px",
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(15,23,42,0.03)",
+  },
+  krNumLabel: {
+    fontSize: 11,
+    color: "rgba(11,18,32,0.55)",
+    fontWeight: 800,
+  },
+  krNumValue: {
+    marginTop: 2,
+    fontWeight: 900,
+    color: "#0B1220",
+  },
+  krNumInput: {
+    width: 92,
+    marginTop: 2,
+    padding: "6px 8px",
+    borderRadius: 10,
+    border: "1px solid rgba(15,23,42,0.12)",
+    background: "rgba(255,255,255,0.92)",
+    outline: "none",
+    fontWeight: 900,
   },
 
   // Layout helpers
@@ -1641,33 +1695,31 @@ const styles = {
     gap: 12,
     alignItems: "flex-end",
     flexWrap: "wrap",
-    marginTop: 10,
   },
 
   // Menu
   iconBtn: {
     width: 40,
-    height: 40,
-    borderRadius: 14,
-    border: "1px solid rgba(155, 255, 235, 0.16)",
-    background: "rgba(8, 12, 28, 0.35)",
-    color: "#EAF2FF",
+    height: 36,
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(255,255,255,0.80)",
+    color: "#0B1220",
     cursor: "pointer",
     fontWeight: 900,
-    boxShadow: "0 0 0 1px rgba(88,101,242,0.06) inset",
   },
   menu: {
     position: "absolute",
     right: 0,
-    top: 48,
+    top: 44,
     minWidth: 170,
-    background: "rgba(8, 12, 28, 0.88)",
-    border: "1px solid rgba(155, 255, 235, 0.18)",
-    borderRadius: 16,
-    boxShadow: "0 18px 50px rgba(0,0,0,0.55)",
+    background: "rgba(255,255,255,0.95)",
+    border: "1px solid rgba(15,23,42,0.12)",
+    borderRadius: 14,
+    boxShadow: "0 18px 40px rgba(15,23,42,0.12)",
     padding: 6,
     zIndex: 20,
-    backdropFilter: "blur(10px)",
+    backdropFilter: "blur(12px)",
   },
   menuItem: {
     width: "100%",
@@ -1678,8 +1730,8 @@ const styles = {
     borderRadius: 12,
     cursor: "pointer",
     fontSize: 14,
-    color: "rgba(234,242,255,0.90)",
-    fontWeight: 800,
+    color: "rgba(11,18,32,0.90)",
+    fontWeight: 700,
   },
   menuItemDanger: {
     width: "100%",
@@ -1690,7 +1742,7 @@ const styles = {
     borderRadius: 12,
     cursor: "pointer",
     fontSize: 14,
-    color: "#FF6BD6",
+    color: "rgba(190, 30, 30, 0.95)",
     fontWeight: 900,
   },
 
@@ -1698,7 +1750,7 @@ const styles = {
   modalMask: {
     position: "fixed",
     inset: 0,
-    background: "rgba(0,0,0,0.55)",
+    background: "rgba(15,23,42,0.25)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -1709,24 +1761,24 @@ const styles = {
     width: "min(980px, 96vw)",
     maxHeight: "86vh",
     overflow: "auto",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
+    background: "rgba(255,255,255,0.92)",
     borderRadius: 18,
-    border: "1px solid rgba(155, 255, 235, 0.18)",
-    boxShadow:
-      "0 26px 70px rgba(0,0,0,0.70), 0 0 0 1px rgba(88,101,242,0.10) inset",
-    backdropFilter: "blur(12px)",
+    border: "1px solid rgba(15,23,42,0.12)",
+    boxShadow: "0 28px 70px rgba(15,23,42,0.18)",
+    backdropFilter: "blur(16px)",
   },
   modalHeader: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    padding: "14px 14px 10px 14px",
-    borderBottom: "1px solid rgba(155, 255, 235, 0.10)",
+    padding: "12px 12px 10px 12px",
+    borderBottom: "1px solid rgba(15,23,42,0.10)",
   },
-  modalBody: {
-    padding: 14,
+  modalTitle: {
+    fontWeight: 900,
+    color: "#0B1220",
   },
+  modalBody: { padding: 12 },
 
   // Checkins
   checkinRow: {
@@ -1734,7 +1786,7 @@ const styles = {
     alignItems: "flex-start",
     gap: 10,
     padding: "12px 0",
-    borderBottom: "1px solid rgba(155, 255, 235, 0.08)",
+    borderBottom: "1px solid rgba(15,23,42,0.08)",
   },
 
   // Tree
@@ -1744,6 +1796,7 @@ const styles = {
     justifyContent: "space-between",
     gap: 12,
     marginBottom: 12,
+    flexWrap: "wrap",
   },
   zoomBar: {
     display: "flex",
@@ -1756,11 +1809,8 @@ const styles = {
     position: "relative",
     overflow: "auto",
     borderRadius: 18,
-    background:
-      "radial-gradient(900px 500px at 10% 20%, rgba(0,255,209,0.12), transparent 55%)," +
-      "radial-gradient(900px 500px at 90% 10%, rgba(88,101,242,0.14), transparent 60%)," +
-      "linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))",
-    border: "1px solid rgba(155, 255, 235, 0.14)",
+    background: "rgba(255,255,255,0.65)",
+    border: "1px solid rgba(15,23,42,0.10)",
     height: "72vh",
   },
   treeSvg: {
@@ -1769,15 +1819,6 @@ const styles = {
     width: "100%",
     height: "100%",
     pointerEvents: "none",
-  },
-  scanlines: {
-    pointerEvents: "none",
-    position: "absolute",
-    inset: 0,
-    background:
-      "repeating-linear-gradient(180deg, rgba(255,255,255,0.00) 0px, rgba(255,255,255,0.00) 6px, rgba(155,255,235,0.03) 7px)",
-    mixBlendMode: "overlay",
-    opacity: 0.35,
   },
   treeLevel: {
     position: "relative",
@@ -1792,56 +1833,38 @@ const styles = {
     alignItems: "flex-start",
     flexWrap: "nowrap",
   },
-  krCol: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 14,
-    minWidth: 270,
-  },
+  krCol: { display: "flex", flexDirection: "column", gap: 12, minWidth: 260 },
 
-  // Node cards
   nodeCard: {
-    width: 270,
+    width: 260,
     borderRadius: 18,
-    border: "1px solid rgba(155, 255, 235, 0.16)",
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03))",
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(255,255,255,0.80)",
     padding: 14,
-    boxShadow:
-      "0 18px 50px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,255,209,0.06) inset",
-    backdropFilter: "blur(10px)",
+    boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
   },
-  nodeRoot: {
-    width: 330,
-    border: "1px solid rgba(0,255,209,0.18)",
-    boxShadow:
-      "0 22px 60px rgba(0,0,0,0.55), 0 0 40px rgba(0,255,209,0.09), 0 0 0 1px rgba(88,101,242,0.09) inset",
-  },
+  nodeRoot: { width: 320 },
   nodeTitle: {
-    fontWeight: 950,
-    fontSize: 16,
+    fontWeight: 900,
+    fontSize: 15,
     marginBottom: 8,
-    letterSpacing: 0.25,
     display: "flex",
     alignItems: "center",
     gap: 8,
-    color: "#EAF2FF",
   },
   nodeGlyph: {
     display: "inline-flex",
-    width: 28,
-    height: 28,
-    borderRadius: 12,
+    width: 26,
+    height: 26,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    background: "rgba(0,255,209,0.10)",
-    border: "1px solid rgba(0,255,209,0.18)",
-    boxShadow: "0 0 18px rgba(0,255,209,0.10)",
-    color: "#CFFFF3",
+    background: "rgba(0,122,255,0.10)",
+    border: "1px solid rgba(0,122,255,0.16)",
     fontWeight: 900,
   },
   nodeSub: {
-    color: "rgba(234,242,255,0.86)",
+    color: "rgba(11,18,32,0.86)",
     fontSize: 13,
     marginBottom: 10,
     lineHeight: 1.35,
@@ -1849,27 +1872,17 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
-  nodeSubSmall: {
-    color: "rgba(234,242,255,0.65)",
-    fontSize: 12,
-    marginTop: 6,
-    marginBottom: 10,
-  },
+  nodeSubSmall: { color: "rgba(11,18,32,0.58)", fontSize: 12 },
   nodeMeta: {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
     gap: 10,
-    color: "rgba(234,242,255,0.65)",
-    fontSize: 12,
-    borderTop: "1px solid rgba(155, 255, 235, 0.10)",
+    borderTop: "1px solid rgba(15,23,42,0.08)",
     paddingTop: 10,
   },
-  nodeProgress: {
-    fontWeight: 900,
-    color: "#CFFFF3",
-    textShadow: "0 0 18px rgba(0,255,209,0.25)",
-  },
+  nodeMetaLeft: { color: "rgba(11,18,32,0.58)", fontSize: 12, fontWeight: 700 },
+  nodeProgress: { fontWeight: 900, color: "rgba(11,18,32,0.85)" },
 
   // Login
   center: {
@@ -1883,45 +1896,30 @@ const styles = {
     width: "min(560px, 92vw)",
     borderRadius: 22,
     padding: 18,
-    background:
-      "linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04))",
-    border: "1px solid rgba(155, 255, 235, 0.18)",
-    boxShadow:
-      "0 28px 70px rgba(0,0,0,0.75), 0 0 0 1px rgba(88,101,242,0.10) inset",
-    backdropFilter: "blur(12px)",
+    background: "rgba(255,255,255,0.90)",
+    border: "1px solid rgba(15,23,42,0.10)",
+    boxShadow: "0 30px 70px rgba(15,23,42,0.12)",
+    backdropFilter: "blur(16px)",
   },
-  brandRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-  },
+  brandRow: { display: "flex", alignItems: "center", gap: 12 },
   brandMark: {
     width: 44,
     height: 44,
     borderRadius: 16,
     background:
-      "radial-gradient(circle at 30% 30%, rgba(255,72,196,0.9), rgba(88,101,242,0.85) 45%, rgba(0,255,209,0.55) 85%)",
-    boxShadow:
-      "0 0 22px rgba(255,72,196,0.18), 0 0 26px rgba(88,101,242,0.16)",
-    border: "1px solid rgba(255,255,255,0.18)",
+      "radial-gradient(circle at 30% 30%, rgba(0,122,255,0.9), rgba(175,82,222,0.75) 55%, rgba(52,199,89,0.55) 100%)",
+    boxShadow: "0 14px 26px rgba(0,122,255,0.16)",
+    border: "1px solid rgba(15,23,42,0.08)",
   },
-  brandTitle: {
-    fontWeight: 950,
-    letterSpacing: 0.4,
-    fontSize: 18,
-  },
-  brandSub: {
-    marginTop: 2,
-    fontSize: 12,
-    color: "rgba(234,242,255,0.65)",
-  },
+  brandTitle: { fontWeight: 950, letterSpacing: 0.3, fontSize: 18 },
+  brandSub: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.55)" },
 
   footer: {
-    marginTop: 18,
+    marginTop: 16,
     display: "flex",
     justifyContent: "center",
     gap: 10,
     fontSize: 12,
-    color: "rgba(234,242,255,0.60)",
+    color: "rgba(11,18,32,0.50)",
   },
 };
