@@ -13,36 +13,35 @@ export default function App() {
 
   const [loading, setLoading] = useState(false);
 
-  // okr_items: O/KR
-  const [items, setItems] = useState([]);
-
-  // tasks + task checkins
+  // okr items: O + KR
+  const [rows, setRows] = useState([]);
+  // tasks under KR
   const [tasks, setTasks] = useState([]);
+  // task checkins
   const [taskCheckins, setTaskCheckins] = useState([]);
-
-  // UI state
-  const [page, setPage] = useState("list"); // list | tree
-  const [editingOId, setEditingOId] = useState(null);
 
   // New O (collapsed)
   const [showNewO, setShowNewO] = useState(false);
   const [newOTitle, setNewOTitle] = useState("");
   const [newOMainOwner, setNewOMainOwner] = useState("");
-  const [newOProgress, setNewOProgress] = useState("0");
+  const [newOProgress, setNewOProgress] = useState("");
   const [newOError, setNewOError] = useState("");
 
-  // Add KR drafts by O
+  const [page, setPage] = useState("list"); // "list" | "tree"
+  const [editingOId, setEditingOId] = useState(null);
+
+  // KR add drafts (per O)
   const [krDrafts, setKrDrafts] = useState({});
 
-  // KR Modal (Task + Checkins)
+  // Task drafts (per KR) — 只给新增用（避免输入丢光标）
+  const [taskDrafts, setTaskDrafts] = useState({});
+
+  // Task check-in drafts (per task)
+  const [taskCheckinDrafts, setTaskCheckinDrafts] = useState({});
+
+  // Modal state: open KR detail/checkin modal
   const [krModal, setKrModal] = useState(null); // { kr, isEditing }
-  const [taskDrafts, setTaskDrafts] = useState({}); // by krId: {title, owner, progress, error, saving}
-  const [openTaskId, setOpenTaskId] = useState(null); // accordion
 
-  // Task checkin drafts by taskId
-  const [taskCkDrafts, setTaskCkDrafts] = useState({});
-
-  // menus
   const [menuOpenKey, setMenuOpenKey] = useState(null);
   const menuRootRef = useRef(null);
 
@@ -82,7 +81,7 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // ---------- Helpers ----------
+  // ---------- Helpers: number format ----------
   const nf = useMemo(() => new Intl.NumberFormat("zh-CN"), []);
   function formatNumber(n) {
     if (n === null || n === undefined || n === "") return "-";
@@ -91,16 +90,10 @@ export default function App() {
     return nf.format(num);
   }
 
-  function safeInt(v, fallback = 0) {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return fallback;
-    return Math.max(0, Math.min(100, Math.round(n)));
-  }
-
-  function safeNumber(v) {
-    if (v === "" || v === null || v === undefined) return null;
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+  function safeNumber(input) {
+    if (input === "" || input === null || input === undefined) return 0;
+    const n = Number(input);
+    return Number.isFinite(n) ? n : NaN;
   }
 
   function ymToFirstDay(ym) {
@@ -108,16 +101,17 @@ export default function App() {
     return `${ym}-01`;
   }
 
-  function ownerLabel(obj) {
-    const a = (obj?.main_owner || "").trim();
-    const b = (obj?.owner_name || "").trim();
-    const c = (obj?.owner_email || "").trim();
+  function ownerLabel(item) {
+    const a = (item?.main_owner || "").trim();
+    const b = (item?.owner_name || "").trim();
+    const c = (item?.owner_email || "").trim();
     return a || b || c || "未设置";
   }
 
-  function taskOwnerLabel(t) {
-    const a = (t?.main_owner || "").trim();
-    return a || "未设置";
+  function manualProgressLabel(p) {
+    const n = Number(p);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(100, Math.round(n)));
   }
 
   // ---------- Auth ----------
@@ -129,6 +123,121 @@ export default function App() {
     return () => listener.subscription.unsubscribe();
   }, []);
 
+  // ---------- Data ----------
+  useEffect(() => {
+    if (session) loadAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  async function loadAll() {
+    setLoading(true);
+
+    const [
+      { data: items, error: itemsErr },
+      { data: ts, error: tasksErr },
+      { data: tcs, error: tcsErr },
+    ] = await Promise.all([
+      supabase.from("okr_items").select("*").order("created_at", { ascending: true }),
+      supabase.from("okr_tasks").select("*").order("created_at", { ascending: true }),
+      supabase
+        .from("okr_task_checkins")
+        .select("*")
+        .order("created_at", { ascending: true }),
+    ]);
+
+    setLoading(false);
+
+    if (itemsErr) {
+      alert("加载 okr_items 失败：" + (itemsErr.message || "unknown error"));
+      setRows([]);
+      return;
+    }
+    if (tasksErr) {
+      alert("加载 okr_tasks 失败：" + (tasksErr.message || "unknown error"));
+      setTasks([]);
+    } else {
+      setTasks(ts || []);
+    }
+    if (tcsErr) {
+      alert("加载 okr_task_checkins 失败：" + (tcsErr.message || "unknown error"));
+      setTaskCheckins([]);
+    } else {
+      setTaskCheckins(tcs || []);
+    }
+
+    const data = items || [];
+    setRows(data);
+
+    // Init drafts for each O / KR
+    const os = data.filter((i) => i.type === "O");
+    setKrDrafts((prev) => {
+      const next = { ...prev };
+      for (const o of os) {
+        if (!next[o.id])
+          next[o.id] = {
+            title: "",
+            main_owner: "",
+            progress: "",
+            error: "",
+            saving: false,
+          };
+      }
+      return next;
+    });
+
+    // Init task draft per KR
+    const krs = data.filter((i) => i.type === "KR");
+    setTaskDrafts((prev) => {
+      const next = { ...prev };
+      for (const kr of krs) {
+        if (!next[kr.id]) {
+          next[kr.id] = { title: "", owner: "", progress: "" };
+        }
+      }
+      return next;
+    });
+
+    // Init task checkin drafts per task
+    const now = new Date();
+    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    setTaskCheckinDrafts((prev) => {
+      const next = { ...prev };
+      for (const t of ts || []) {
+        if (!next[t.id]) next[t.id] = { month: ym, note: "", saving: false, error: "" };
+      }
+      return next;
+    });
+  }
+
+  const objectives = useMemo(() => {
+    const os = rows.filter((r) => r.type === "O");
+    const krs = rows.filter((r) => r.type === "KR");
+
+    return os.map((o) => ({
+      ...o,
+      krs: krs.filter((k) => k.parent_id === o.id),
+    }));
+  }, [rows]);
+
+  const tasksByKr = useMemo(() => {
+    const map = {};
+    for (const t of tasks) {
+      if (!map[t.kr_id]) map[t.kr_id] = [];
+      map[t.kr_id].push(t);
+    }
+    return map;
+  }, [tasks]);
+
+  const checkinsByTask = useMemo(() => {
+    const map = {};
+    for (const c of taskCheckins) {
+      if (!map[c.task_id]) map[c.task_id] = [];
+      map[c.task_id].push(c);
+    }
+    return map;
+  }, [taskCheckins]);
+
+  // ---------- Auth Actions ----------
   async function signIn() {
     if (!email.trim()) return alert("请输入邮箱");
     setAuthSending(true);
@@ -142,119 +251,43 @@ export default function App() {
     await supabase.auth.signOut();
   }
 
-  // ---------- Data loading ----------
-  useEffect(() => {
-    if (session) loadAll();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session]);
-
-  async function loadAll() {
-    setLoading(true);
-
-    const [a, b, c] = await Promise.all([
-      supabase.from("okr_items").select("*").order("created_at", { ascending: true }),
-      supabase.from("okr_tasks").select("*").order("created_at", { ascending: true }),
-      supabase
-        .from("okr_task_checkins")
-        .select("*")
-        .order("created_at", { ascending: true }),
-    ]);
-
-    setLoading(false);
-
-    if (a.error) {
-      alert("加载 okr_items 失败：" + (a.error.message || "unknown error"));
-      setItems([]);
+  // ---------- OKR Actions ----------
+  async function addObjective() {
+    const title = newOTitle.trim();
+    if (!title) {
+      setNewOError("请先填写 Objective");
       return;
     }
-    if (b.error) {
-      alert("加载 okr_tasks 失败：" + (b.error.message || "unknown error"));
-      setTasks([]);
-    } else setTasks(b.data || []);
-    if (c.error) {
-      alert("加载 okr_task_checkins 失败：" + (c.error.message || "unknown error"));
-      setTaskCheckins([]);
-    } else setTaskCheckins(c.data || []);
+    setNewOError("");
 
-    const data = a.data || [];
-    setItems(data);
+    const progress = manualProgressLabel(newOProgress);
 
-    // init kr drafts
-    const os = data.filter((x) => x.type === "O");
-    setKrDrafts((prev) => {
-      const next = { ...prev };
-      for (const o of os) {
-        if (!next[o.id]) {
-          next[o.id] = {
-            title: "",
-            main_owner: "",
-            target: "",
-            current: "",
-            progress: "0",
-            error: "",
-            saving: false,
-          };
-        }
-      }
-      return next;
-    });
+    const payload = {
+      id: crypto.randomUUID(),
+      title,
+      type: "O",
+      level: "company",
+      department: "company",
+      main_owner: (newOMainOwner || "").trim() || null,
+      progress_manual: progress,
+      owner_id: session.user.id,
+      owner_email: session.user.email,
+      owner_name: session.user.email,
+    };
 
-    // init task drafts + checkin drafts
-    const krs = data.filter((x) => x.type === "KR");
-    const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    setLoading(true);
+    const { error } = await supabase.from("okr_items").insert(payload);
+    setLoading(false);
 
-    setTaskDrafts((prev) => {
-      const next = { ...prev };
-      for (const kr of krs) {
-        if (!next[kr.id]) {
-          next[kr.id] = { title: "", main_owner: "", progress: "0", saving: false, error: "" };
-        }
-      }
-      return next;
-    });
+    if (error) return alert("新增 O 失败：" + (error.message || "unknown error"));
 
-    setTaskCkDrafts((prev) => {
-      const next = { ...prev };
-      // 给每个 task 初始化
-      for (const t of (b.data || [])) {
-        if (!next[t.id]) {
-          next[t.id] = { month: ym, value: "", note: "", saving: false, error: "" };
-        }
-      }
-      return next;
-    });
+    setNewOTitle("");
+    setNewOMainOwner("");
+    setNewOProgress("");
+    setShowNewO(false);
+    await loadAll();
   }
 
-  // ---------- Derived ----------
-  const objectives = useMemo(() => {
-    const os = items.filter((r) => r.type === "O");
-    const krs = items.filter((r) => r.type === "KR");
-    return os.map((o) => ({
-      ...o,
-      krs: krs.filter((k) => k.parent_id === o.id),
-    }));
-  }, [items]);
-
-  const tasksByKr = useMemo(() => {
-    const map = {};
-    for (const t of tasks) {
-      if (!map[t.kr_id]) map[t.kr_id] = [];
-      map[t.kr_id].push(t);
-    }
-    return map;
-  }, [tasks]);
-
-  const checkinsByTask = useMemo(() => {
-    const map = {};
-    for (const ck of taskCheckins) {
-      if (!map[ck.task_id]) map[ck.task_id] = [];
-      map[ck.task_id].push(ck);
-    }
-    return map;
-  }, [taskCheckins]);
-
-  // ---------- Generic DB helpers ----------
   async function updateItem(id, patch) {
     const { error } = await supabase.from("okr_items").update(patch).eq("id", id);
     if (error) {
@@ -266,13 +299,64 @@ export default function App() {
 
   async function deleteItem(id, label) {
     setMenuOpenKey(null);
-    if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其 Task 与复盘记录）`)) return;
+    if (!confirm(`确认删除：${label}？\n（删除 KR 会连带删除其 Task 和 Task 复盘记录）`)) return;
 
     const { error } = await supabase.from("okr_items").delete().eq("id", id);
     if (error) return alert("删除失败：" + (error.message || "unknown error"));
 
     if (editingOId === id) setEditingOId(null);
     if (krModal?.kr?.id === id) setKrModal(null);
+    await loadAll();
+  }
+
+  function setKRDraft(objectiveId, patch) {
+    setKrDrafts((prev) => ({
+      ...prev,
+      [objectiveId]: { ...(prev[objectiveId] || {}), ...patch },
+    }));
+  }
+
+  async function addKR(objectiveId) {
+    const draft = krDrafts[objectiveId] || { title: "", main_owner: "", progress: "" };
+    const title = (draft.title || "").trim();
+    const main_owner = (draft.main_owner || "").trim();
+    const progress = manualProgressLabel(draft.progress);
+
+    if (!title) return setKRDraft(objectiveId, { error: "请填写 KR 描述" });
+
+    const parentO = objectives.find((x) => x.id === objectiveId);
+    setKRDraft(objectiveId, { error: "", saving: true });
+
+    const payload = {
+      id: crypto.randomUUID(),
+      title,
+      type: "KR",
+      parent_id: objectiveId,
+      level: parentO?.level || "company",
+      department: parentO?.department || "company",
+      main_owner: main_owner || null,
+      progress_manual: progress,
+      owner_id: session.user.id,
+      owner_email: session.user.email,
+      owner_name: session.user.email,
+    };
+
+    const { error } = await supabase.from("okr_items").insert(payload);
+    if (error) {
+      setKRDraft(objectiveId, {
+        saving: false,
+        error: "新增 KR 失败：" + (error.message || "unknown"),
+      });
+      return;
+    }
+
+    setKRDraft(objectiveId, {
+      title: "",
+      main_owner: "",
+      progress: "",
+      saving: false,
+      error: "",
+    });
     await loadAll();
   }
 
@@ -293,154 +377,58 @@ export default function App() {
     if (ok) await loadAll();
   }
 
-  async function updateProgress(id, raw) {
-    const p = safeInt(raw, 0);
-    const ok = await updateItem(id, { progress_percent: p });
+  async function updateManualProgressOnItem(id, raw) {
+    const p = manualProgressLabel(raw);
+    const ok = await updateItem(id, { progress_manual: p });
     if (ok) await loadAll();
   }
 
-  async function updateKRTarget(krId, raw) {
-    const n = safeNumber(raw);
-    const ok = await updateItem(krId, { target_value: n });
-    if (ok) await loadAll();
-  }
-  async function updateKRCurrent(krId, raw) {
-    const n = safeNumber(raw);
-    const ok = await updateItem(krId, { current_value: n });
-    if (ok) await loadAll();
-  }
-
-  // ---------- Create O / KR ----------
-  async function addObjective() {
-    const title = newOTitle.trim();
-    if (!title) {
-      setNewOError("请先填写 Objective");
-      return;
-    }
-    setNewOError("");
-
-    const payload = {
-      id: crypto.randomUUID(),
-      title,
-      type: "O",
-      parent_id: null,
-      level: "company",
-      department: "company",
-      main_owner: (newOMainOwner || "").trim() || null,
-      progress_percent: safeInt(newOProgress, 0),
-      owner_id: session.user.id,
-      owner_email: session.user.email,
-      owner_name: session.user.email,
-    };
-
-    setLoading(true);
-    const { error } = await supabase.from("okr_items").insert(payload);
-    setLoading(false);
-
-    if (error) return alert("新增 O 失败：" + (error.message || "unknown error"));
-
-    setNewOTitle("");
-    setNewOMainOwner("");
-    setNewOProgress("0");
-    setShowNewO(false);
-    await loadAll();
-  }
-
-  function setKRDraft(objectiveId, patch) {
-    setKrDrafts((prev) => ({
-      ...prev,
-      [objectiveId]: { ...(prev[objectiveId] || {}), ...patch },
-    }));
-  }
-
-  async function addKR(objectiveId) {
-    const d = krDrafts[objectiveId] || {};
-    const title = (d.title || "").trim();
-    const main_owner = (d.main_owner || "").trim();
-    const progress = safeInt(d.progress, 0);
-
-    if (!title) return setKRDraft(objectiveId, { error: "请填写 KR 描述" });
-
-    setKRDraft(objectiveId, { error: "", saving: true });
-
-    const payload = {
-      id: crypto.randomUUID(),
-      title,
-      type: "KR",
-      parent_id: objectiveId,
-      level: "company",
-      department: "company",
-      main_owner: main_owner || null,
-      target_value: safeNumber(d.target),
-      current_value: safeNumber(d.current),
-      progress_percent: progress,
-      owner_id: session.user.id,
-      owner_email: session.user.email,
-      owner_name: session.user.email,
-    };
-
-    const { error } = await supabase.from("okr_items").insert(payload);
-    if (error) {
-      setKRDraft(objectiveId, {
-        saving: false,
-        error: "新增 KR 失败：" + (error.message || "unknown"),
-      });
-      return;
-    }
-
-    setKRDraft(objectiveId, {
-      title: "",
-      main_owner: "",
-      target: "",
-      current: "",
-      progress: "0",
-      saving: false,
-      error: "",
-    });
-    await loadAll();
-  }
-
-  // ---------- Tasks CRUD ----------
+  // ---------- Task Actions ----------
   function setTaskDraft(krId, patch) {
     setTaskDrafts((prev) => ({
       ...prev,
-      [krId]: { ...(prev[krId] || {}), ...patch },
+      [krId]: {
+        title: "",
+        owner: "",
+        progress: "",
+        ...(prev[krId] || {}),
+        ...patch,
+      },
     }));
   }
 
   async function addTask(krId) {
-    const d = taskDrafts[krId] || {};
+    const d = taskDrafts[krId] || { title: "", owner: "", progress: "" };
     const title = (d.title || "").trim();
-    const main_owner = (d.main_owner || "").trim();
-    const progress = safeInt(d.progress, 0);
+    if (!title) return;
 
-    if (!title) return setTaskDraft(krId, { error: "请填写 Task 描述" });
-
-    setTaskDraft(krId, { saving: true, error: "" });
+    const progress = manualProgressLabel(d.progress);
 
     const payload = {
       id: crypto.randomUUID(),
       kr_id: krId,
       title,
-      main_owner: main_owner || null,
-      progress_percent: progress,
+      main_owner: (d.owner || "").trim() || null,
+      progress_manual: progress,
       created_by: session.user.id,
     };
 
+    // 关键：新增时不 loadAll（避免输入时连带重渲染导致光标异常）
     const { error } = await supabase.from("okr_tasks").insert(payload);
-    if (error) {
-      setTaskDraft(krId, { saving: false, error: "新增 Task 失败：" + (error.message || "unknown") });
-      return;
-    }
+    if (error) return alert("新增 Task 失败：" + (error.message || "unknown"));
 
-    setTaskDraft(krId, { title: "", main_owner: "", progress: "0", saving: false, error: "" });
-    await loadAll();
+    // 本地追加（保持 UI 流畅 & 不丢光标）
+    setTasks((prev) => [...prev, payload]);
+    setTaskDrafts((prev) => ({
+      ...prev,
+      [krId]: { title: "", owner: "", progress: "" },
+    }));
   }
 
   async function updateTask(taskId, patch) {
     const { error } = await supabase.from("okr_tasks").update(patch).eq("id", taskId);
     if (error) {
-      alert("Task 保存失败：" + (error.message || "unknown error"));
+      alert("Task 保存失败：" + (error.message || "unknown"));
       return false;
     }
     return true;
@@ -448,35 +436,38 @@ export default function App() {
 
   async function deleteTask(taskId) {
     setMenuOpenKey(null);
-    if (!confirm("确认删除这个 Task？（会连带删除该 Task 的复盘记录）")) return;
+    if (!confirm("确认删除这个 Task？（会连带删除 Task 的复盘记录）")) return;
+
     const { error } = await supabase.from("okr_tasks").delete().eq("id", taskId);
-    if (error) return alert("删除失败：" + (error.message || "unknown error"));
-    if (openTaskId === taskId) setOpenTaskId(null);
-    await loadAll();
+    if (error) return alert("删除 Task 失败：" + (error.message || "unknown"));
+
+    // 本地删除
+    setTasks((prev) => prev.filter((t) => t.id !== taskId));
+    setTaskCheckins((prev) => prev.filter((c) => c.task_id !== taskId));
   }
 
-  // ---------- Task Check-ins ----------
-  function setTaskCkDraft(taskId, patch) {
-    setTaskCkDrafts((prev) => ({
+  // ---------- Task Check-in ----------
+  function setTaskCheckinDraft(taskId, patch) {
+    setTaskCheckinDrafts((prev) => ({
       ...prev,
       [taskId]: { ...(prev[taskId] || {}), ...patch },
     }));
   }
 
-  async function upsertTaskCheckin(task) {
-    const d = taskCkDrafts[task.id] || { month: "", value: "", note: "" };
-    const monthFirstDay = ymToFirstDay(d.month);
-    if (!monthFirstDay) return setTaskCkDraft(task.id, { error: "请选择月份" });
+  async function upsertTaskCheckin(task, rawMonth, rawNote) {
+    const monthFirstDay = ymToFirstDay(rawMonth);
+    if (!monthFirstDay) {
+      alert("请选择月份");
+      return;
+    }
 
-    const valueNum = safeNumber(d.value); // 允许为空
-    setTaskCkDraft(task.id, { saving: true, error: "" });
+    const note = (rawNote || "").trim();
 
     const payload = {
       id: crypto.randomUUID(),
       task_id: task.id,
       month: monthFirstDay,
-      value: valueNum,
-      note: (d.note || "").trim(),
+      note,
       created_by: session.user.id,
     };
 
@@ -485,18 +476,26 @@ export default function App() {
       .upsert(payload, { onConflict: "task_id,month" });
 
     if (error) {
-      setTaskCkDraft(task.id, { saving: false, error: "记录失败：" + (error.message || "unknown") });
+      alert("记录复盘失败：" + (error.message || "unknown"));
       return;
     }
 
-    setTaskCkDraft(task.id, { value: "", note: "", saving: false, error: "" });
-    await loadAll();
+    // 本地合并（不强制 loadAll，避免 modal 内输入状态抖动）
+    setTaskCheckins((prev) => {
+      const exists = prev.find((x) => x.task_id === task.id && String(x.month).slice(0, 10) === monthFirstDay);
+      if (exists) {
+        return prev.map((x) =>
+          x.task_id === task.id && String(x.month).slice(0, 10) === monthFirstDay ? { ...x, note } : x
+        );
+      }
+      return [...prev, payload];
+    });
   }
 
   async function updateTaskCheckin(id, patch) {
     const { error } = await supabase.from("okr_task_checkins").update(patch).eq("id", id);
     if (error) {
-      alert("复盘更新失败：" + (error.message || "unknown error"));
+      alert("复盘更新失败：" + (error.message || "unknown"));
       return false;
     }
     return true;
@@ -505,12 +504,14 @@ export default function App() {
   async function deleteTaskCheckin(id) {
     setMenuOpenKey(null);
     if (!confirm("确认删除这条复盘记录？")) return;
+
     const { error } = await supabase.from("okr_task_checkins").delete().eq("id", id);
-    if (error) return alert("删除失败：" + (error.message || "unknown error"));
-    await loadAll();
+    if (error) return alert("删除失败：" + (error.message || "unknown"));
+
+    setTaskCheckins((prev) => prev.filter((c) => c.id !== id));
   }
 
-  // ---------- UI building blocks ----------
+  // ---------- UI Components ----------
   function Chip({ children, tone = "gray" }) {
     const t =
       tone === "blue"
@@ -609,7 +610,270 @@ export default function App() {
     );
   }
 
-  // ---------- Tree View (保持到 KR 层) ----------
+  // ---------- KR Modal: Task 复盘结构 ----------
+  function KRTaskCheckinModal({ kr, isEditing }) {
+    const krTasks = tasksByKr[kr.id] || [];
+
+    return (
+      <div>
+        <div style={styles.modalSummaryBar}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <Chip tone="blue">KR 进度：{manualProgressLabel(kr.progress_manual)}%</Chip>
+            <Chip tone="gray">Task 数：{krTasks.length}</Chip>
+            <Chip tone="gray">负责人：{ownerLabel(kr)}</Chip>
+          </div>
+          <div style={styles.muted}>
+            复盘按 Task 记录；O/KR/Task 进度均为手填，不自动计算
+          </div>
+        </div>
+
+        {/* Tasks list */}
+        <div style={{ marginTop: 12 }}>
+          <div style={styles.sectionTitle}>Task 列表</div>
+
+          {krTasks.length ? (
+            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+              {krTasks.map((t, idx) => {
+                const p = manualProgressLabel(t.progress_manual);
+                const tone = p >= 80 ? "green" : p >= 40 ? "blue" : "violet";
+                const history = (checkinsByTask[t.id] || []).slice().reverse();
+                const draft = taskCheckinDrafts[t.id] || { month: "", note: "", saving: false, error: "" };
+
+                return (
+                  <div key={t.id} style={styles.taskCard}>
+                    <div style={styles.taskTopRow}>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                        <span style={styles.taskBadge}>{`T${idx + 1}`}</span>
+
+                        <div style={{ minWidth: 0 }}>
+                          {/* Task title (edit onBlur) */}
+                          {isEditing ? (
+                            <input
+                              style={styles.taskTitleInput}
+                              defaultValue={t.title}
+                              onBlur={async (e) => {
+                                const title = (e.target.value || "").trim();
+                                if (!title) return alert("Task 标题不能为空");
+                                const ok = await updateTask(t.id, { title });
+                                if (ok) setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, title } : x)));
+                              }}
+                            />
+                          ) : (
+                            <div style={styles.taskTitleText} title={t.title}>
+                              {t.title}
+                            </div>
+                          )}
+
+                          <div style={styles.taskMetaLine}>
+                            <span style={styles.krSubLabel}>负责人：</span>
+                            {isEditing ? (
+                              <input
+                                style={styles.krMiniInput}
+                                defaultValue={t.main_owner || ""}
+                                placeholder="姓名"
+                                onBlur={async (e) => {
+                                  const v = (e.target.value || "").trim();
+                                  const ok = await updateTask(t.id, { main_owner: v || null });
+                                  if (ok) setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, main_owner: v || null } : x)));
+                                }}
+                              />
+                            ) : (
+                              <span style={styles.krSubValue}>{ownerLabel(t)}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <Chip tone={tone}>进度 {p}%</Chip>
+                        {isEditing ? (
+                          <input
+                            style={styles.taskProgressInput}
+                            type="number"
+                            defaultValue={p}
+                            onBlur={async (e) => {
+                              const v = manualProgressLabel(e.target.value);
+                              const ok = await updateTask(t.id, { progress_manual: v });
+                              if (ok) setTasks((prev) => prev.map((x) => (x.id === t.id ? { ...x, progress_manual: v } : x)));
+                            }}
+                          />
+                        ) : null}
+
+                        {isEditing ? (
+                          <MoreMenu
+                            menuKey={`task:${t.id}`}
+                            items={[
+                              { label: "删除 Task", danger: true, onClick: () => deleteTask(t.id) },
+                            ]}
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 10 }}>
+                      <ProgressBar value={p} />
+                    </div>
+
+                    {/* Check-in */}
+                    <div style={{ marginTop: 12, ...styles.subPanel }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                        <div style={styles.sectionTitle}>月度复盘</div>
+                        <div style={styles.muted}>同一 Task + 同一月份 只保留一条（会覆盖）</div>
+                      </div>
+
+                      <div style={{ marginTop: 10 }}>
+                        {isEditing ? (
+                          <>
+                            <div style={styles.grid2}>
+                              <div>
+                                <div style={styles.label}>月份</div>
+                                <input
+                                  style={styles.input}
+                                  type="month"
+                                  value={draft.month || ""}
+                                  onChange={(e) => setTaskCheckinDraft(t.id, { month: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <div style={styles.label}>复盘备注（可选）</div>
+                                <input
+                                  style={styles.input}
+                                  placeholder="例如：本月完成了哪些关键动作 / 风险点"
+                                  value={draft.note || ""}
+                                  onChange={(e) => setTaskCheckinDraft(t.id, { note: e.target.value })}
+                                />
+                              </div>
+                            </div>
+
+                            <div style={{ marginTop: 10 }}>
+                              <Button
+                                onClick={async () => {
+                                  await upsertTaskCheckin(t, draft.month, draft.note);
+                                  setTaskCheckinDrafts((prev) => ({
+                                    ...prev,
+                                    [t.id]: { ...(prev[t.id] || {}), note: "" },
+                                  }));
+                                }}
+                              >
+                                记录本月复盘
+                              </Button>
+                            </div>
+                          </>
+                        ) : (
+                          <div style={styles.muted}>
+                            只读模式：如需新增/编辑 Task 与复盘，请先在该 O 右上角点击「修改」进入编辑模式。
+                          </div>
+                        )}
+
+                        {/* History */}
+                        <div style={{ marginTop: 12 }}>
+                          <div style={styles.sectionTitle}>历史复盘</div>
+                          {history.length ? (
+                            <div style={{ marginTop: 10 }}>
+                              {history.map((h) => (
+                                <div key={h.id} style={styles.checkinRow}>
+                                  <div style={{ width: 92 }}>
+                                    <Chip tone="violet">{String(h.month).slice(0, 7)}</Chip>
+                                  </div>
+
+                                  {!isEditing ? (
+                                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+                                      {h.note ? (
+                                        <div style={{ maxWidth: 740 }}>
+                                          <span style={styles.muted}>备注：</span>
+                                          <span>{h.note}</span>
+                                        </div>
+                                      ) : (
+                                        <div style={styles.muted}>（无备注）</div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                                      <span style={styles.muted}>备注：</span>
+                                      <input
+                                        style={{ ...styles.inlineInput, width: 520 }}
+                                        defaultValue={h.note || ""}
+                                        onBlur={async (e) => {
+                                          const ok = await updateTaskCheckin(h.id, { note: e.target.value });
+                                          if (ok) setTaskCheckins((prev) => prev.map((x) => (x.id === h.id ? { ...x, note: e.target.value } : x)));
+                                        }}
+                                      />
+
+                                      <MoreMenu
+                                        menuKey={`tck:${h.id}`}
+                                        items={[
+                                          { label: "删除复盘", danger: true, onClick: () => deleteTaskCheckin(h.id) },
+                                        ]}
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{ marginTop: 10, ...styles.muted }}>暂无复盘记录</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ marginTop: 10, ...styles.muted }}>当前 KR 还没有 Task</div>
+          )}
+
+          {/* Add Task (only in edit mode) */}
+          {isEditing ? (
+            <div style={{ marginTop: 14, ...styles.subPanel }}>
+              <div style={styles.sectionTitle}>新增 Task</div>
+
+              <div style={{ marginTop: 10 }}>
+                {/* 关键：新增输入区不在 map 内，不会丢光标 */}
+                <div style={styles.formRow}>
+                  <div style={{ flex: 2 }}>
+                    <div style={styles.label}>Task 内容</div>
+                    <input
+                      style={styles.input}
+                      placeholder="例如：完成某渠道投放 SOP 并跑通数据看板"
+                      value={taskDrafts[kr.id]?.title || ""}
+                      onChange={(e) => setTaskDraft(kr.id, { title: e.target.value })}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={styles.label}>负责人</div>
+                    <input
+                      style={styles.input}
+                      placeholder="例如：张三"
+                      value={taskDrafts[kr.id]?.owner || ""}
+                      onChange={(e) => setTaskDraft(kr.id, { owner: e.target.value })}
+                    />
+                  </div>
+                  <div style={{ width: 160 }}>
+                    <div style={styles.label}>进度（手填 %）</div>
+                    <input
+                      style={styles.input}
+                      type="number"
+                      placeholder="0-100"
+                      value={taskDrafts[kr.id]?.progress || ""}
+                      onChange={(e) => setTaskDraft(kr.id, { progress: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 10 }}>
+                  <Button onClick={() => addTask(kr.id)}>新增 Task</Button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- Tree View (Zoom + Fullscreen) ----------
   function TreeView({ objectives }) {
     const wrapRef = useRef(null);
     const contentRef = useRef(null);
@@ -619,7 +883,7 @@ export default function App() {
     const [isFullscreen, setIsFullscreen] = useState(false);
 
     const root = useMemo(
-      () => ({ id: "root", title: "年度 OKR", type: "ROOT", main_owner: "公司", progress_percent: 0 }),
+      () => ({ id: "root", title: "年度 OKR", type: "ROOT", main_owner: "公司", progress_manual: 0 }),
       []
     );
 
@@ -629,14 +893,14 @@ export default function App() {
       else nodeRefs.current.delete(key);
     }
 
+    // ✅ 修复缩放线条错位：在缩放后 getBoundingClientRect 会变大/变小，需要除以 scale 回到内容坐标系
     function calcPos(el) {
       const r = el.getBoundingClientRect();
       const cr = contentRef.current.getBoundingClientRect();
-      return {
-        x: r.left - cr.left + r.width / 2,
-        top: r.top - cr.top,
-        bottom: r.bottom - cr.top,
-      };
+      const x = (r.left - cr.left + r.width / 2) / scale;
+      const top = (r.top - cr.top) / scale;
+      const bottom = (r.bottom - cr.top) / scale;
+      return { x, top, bottom };
     }
 
     function recomputeLines() {
@@ -694,8 +958,9 @@ export default function App() {
 
     useEffect(() => {
       function onFsChange() {
-        setIsFullscreen(!!document.fullscreenElement);
-        setTimeout(() => recomputeLines(), 50);
+        const fsEl = document.fullscreenElement;
+        setIsFullscreen(!!fsEl);
+        setTimeout(() => recomputeLines(), 60);
       }
       document.addEventListener("fullscreenchange", onFsChange);
       return () => document.removeEventListener("fullscreenchange", onFsChange);
@@ -744,7 +1009,7 @@ export default function App() {
       if (!document.fullscreenElement) {
         try {
           await el.requestFullscreen();
-        } catch {
+        } catch (e) {
           alert("进入全屏失败（浏览器可能限制）");
         }
       } else {
@@ -752,18 +1017,15 @@ export default function App() {
       }
     }
 
-    // 手填进度：root 用 O 的平均
-    const rootProgress =
-      objectives.length === 0
-        ? 0
-        : Math.round(objectives.reduce((acc, o) => acc + (o.progress_percent ?? 0), 0) / objectives.length);
+    // Root progress：不自动算，这里就取 0 或显示“手填”
+    const rootProgress = 0;
 
     return (
       <div style={styles.panel}>
         <div style={styles.treeTopBar}>
           <div>
             <div style={styles.h3}>关系树</div>
-            <div style={styles.muted}>Ctrl/⌘ + 滚轮缩放；点击 KR 打开任务/复盘</div>
+            <div style={styles.muted}>Ctrl/⌘ + 滚轮缩放；点击 KR 可打开 Task 复盘</div>
           </div>
 
           <div style={styles.zoomBar}>
@@ -797,7 +1059,17 @@ export default function App() {
               padding: 22,
             }}
           >
-            <svg style={styles.treeSvg}>
+            {/* SVG 与节点同一坐标系（未缩放坐标），我们用 ÷scale 的坐标来画线 */}
+            <svg
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                pointerEvents: "none",
+                overflow: "visible",
+              }}
+            >
               {lines.map((ln, i) => (
                 <line
                   key={i}
@@ -811,6 +1083,7 @@ export default function App() {
               ))}
             </svg>
 
+            {/* Root */}
             <div style={styles.treeLevel}>
               <div ref={(el) => setRef("root", el)} style={{ ...styles.nodeCard, ...styles.nodeRoot }}>
                 <div style={styles.nodeTitle}>
@@ -822,57 +1095,68 @@ export default function App() {
                   <span style={styles.nodeMetaLeft}>类型：公司</span>
                   <span style={styles.nodeProgress}>{rootProgress}%</span>
                 </div>
-                <ProgressBar value={rootProgress} />
+                <ProgressBar value={Math.min(100, rootProgress)} />
               </div>
             </div>
 
+            {/* O Level */}
             <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
-                {objectives.map((o, idx) => (
-                  <div key={o.id} ref={(el) => setRef(`o:${o.id}`, el)} style={styles.nodeCard}>
-                    <div style={styles.nodeTitle}>
-                      <span style={styles.nodeGlyph}>O</span>
-                      {`O${idx + 1}`}
+                {objectives.map((o, idx) => {
+                  const oProgress = manualProgressLabel(o.progress_manual);
+                  return (
+                    <div
+                      key={o.id}
+                      ref={(el) => setRef(`o:${o.id}`, el)}
+                      style={styles.nodeCard}
+                      title={o.title}
+                    >
+                      <div style={styles.nodeTitle}>
+                        <span style={styles.nodeGlyph}>O</span>
+                        {`O${idx + 1}`}
+                      </div>
+                      <div style={styles.nodeSub}>{o.title}</div>
+                      <div style={styles.nodeSubSmall}>负责人：{ownerLabel(o)}</div>
+                      <div style={styles.nodeMeta}>
+                        <span style={styles.nodeMetaLeft}>公司</span>
+                        <span style={styles.nodeProgress}>{oProgress}%</span>
+                      </div>
+                      <ProgressBar value={Math.min(100, oProgress)} />
                     </div>
-                    <div style={styles.nodeSub}>{o.title}</div>
-                    <div style={styles.nodeSubSmall}>负责人：{ownerLabel(o)}</div>
-                    <div style={styles.nodeMeta}>
-                      <span style={styles.nodeMetaLeft}>公司</span>
-                      <span style={styles.nodeProgress}>{o.progress_percent ?? 0}%</span>
-                    </div>
-                    <ProgressBar value={o.progress_percent ?? 0} />
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
+            {/* KR Level */}
             <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
                 {objectives.map((o) => (
                   <div key={o.id} style={styles.krCol}>
-                    {(o.krs || []).map((k, kIdx) => (
-                      <div
-                        key={k.id}
-                        ref={(el) => setRef(`kr:${k.id}`, el)}
-                        style={{ ...styles.nodeCard, cursor: "pointer" }}
-                        onClick={() => setKrModal({ kr: k, isEditing: false })}
-                        title="点击打开任务/复盘"
-                      >
-                        <div style={styles.nodeTitle}>
-                          <span style={styles.nodeGlyph}>K</span>
-                          {`KR${kIdx + 1}`}
+                    {(o.krs || []).map((k, kIdx) => {
+                      const p = manualProgressLabel(k.progress_manual);
+                      return (
+                        <div
+                          key={k.id}
+                          ref={(el) => setRef(`kr:${k.id}`, el)}
+                          style={{ ...styles.nodeCard, cursor: "pointer" }}
+                          onClick={() => setKrModal({ kr: k, isEditing: false })}
+                          title="点击打开 Task 复盘"
+                        >
+                          <div style={styles.nodeTitle}>
+                            <span style={styles.nodeGlyph}>K</span>
+                            {`KR${kIdx + 1}`}
+                          </div>
+                          <div style={styles.nodeSub}>{k.title}</div>
+                          <div style={styles.nodeSubSmall}>负责人：{ownerLabel(k)}</div>
+                          <div style={styles.nodeMeta}>
+                            <span style={styles.nodeMetaLeft}>进度手填</span>
+                            <span style={styles.nodeProgress}>{p}%</span>
+                          </div>
+                          <ProgressBar value={Math.min(100, p)} />
                         </div>
-                        <div style={styles.nodeSub}>{k.title}</div>
-                        <div style={styles.nodeSubSmall}>负责人：{ownerLabel(k)}</div>
-                        <div style={styles.nodeMeta}>
-                          <span style={styles.nodeMetaLeft}>
-                            进度：{k.progress_percent ?? 0}%
-                          </span>
-                          <span style={styles.nodeProgress}>{k.progress_percent ?? 0}%</span>
-                        </div>
-                        <ProgressBar value={k.progress_percent ?? 0} />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ))}
               </div>
@@ -883,7 +1167,7 @@ export default function App() {
     );
   }
 
-  // ---------- Auth page ----------
+  // ---------- Auth Page ----------
   if (!session) {
     return (
       <div style={styles.center}>
@@ -892,7 +1176,7 @@ export default function App() {
             <div style={styles.brandMark} />
             <div>
               <div style={styles.brandTitle}>OKR Nexus</div>
-              <div style={styles.brandSub}>O → KR → Task · Task 月度复盘</div>
+              <div style={styles.brandSub}>轻量 · 专注 · Tahoe 风格</div>
             </div>
           </div>
 
@@ -912,295 +1196,9 @@ export default function App() {
             {authSending ? "发送中..." : "发送登录链接"}
           </Button>
 
-          <div style={{ marginTop: 12, ...styles.muted }}>* 若没收到邮件，请检查垃圾箱</div>
-        </div>
-      </div>
-    );
-  }
-
-  // ---------- KR Modal content: Task + Task Checkins ----------
-  function KRTasksModal({ kr, isEditing }) {
-    const list = tasksByKr[kr.id] || [];
-    const draft = taskDrafts[kr.id] || { title: "", main_owner: "", progress: "0", saving: false, error: "" };
-
-    return (
-      <div>
-        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-          <div>
-            <div style={{ fontWeight: 950, fontSize: 14, color: "#0B1220" }}>{kr.title}</div>
-            <div style={styles.muted}>
-              KR 负责人：<b>{ownerLabel(kr)}</b> · KR 进度（手填）：<b>{kr.progress_percent ?? 0}%</b>
-            </div>
+          <div style={{ marginTop: 12, ...styles.muted }}>
+            * 若没收到邮件，请检查垃圾箱或稍后重试
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {isEditing ? <Chip tone="green">编辑模式</Chip> : <Chip tone="gray">只读</Chip>}
-          </div>
-        </div>
-
-        {/* Tasks list */}
-        <div style={{ marginTop: 14 }}>
-          <div style={styles.sectionTitle}>实施任务（Task）</div>
-          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-            {list.length ? (
-              list.map((t, idx) => {
-                const isOpen = openTaskId === t.id;
-                const ckDraft = taskCkDrafts[t.id] || { month: "", value: "", note: "", saving: false, error: "" };
-                const history = (checkinsByTask[t.id] || []).slice().sort((a, b) => String(b.month).localeCompare(String(a.month)));
-
-                return (
-                  <div key={t.id} style={styles.taskCard}>
-                    <div style={styles.taskTopRow}>
-                      <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
-                        <span style={styles.taskBadge}>{`T${idx + 1}`}</span>
-
-                        <div style={{ minWidth: 0 }}>
-                          {isEditing ? (
-                            <input
-                              style={styles.taskTitleInput}
-                              defaultValue={t.title}
-                              onBlur={async (e) => {
-                                const v = (e.target.value || "").trim();
-                                if (!v) return alert("Task 标题不能为空");
-                                const ok = await updateTask(t.id, { title: v });
-                                if (ok) await loadAll();
-                              }}
-                            />
-                          ) : (
-                            <div style={styles.taskTitleText} title={t.title}>
-                              {t.title}
-                            </div>
-                          )}
-
-                          <div style={styles.taskSubLine}>
-                            <span style={styles.krSubLabel}>负责人：</span>
-                            {isEditing ? (
-                              <input
-                                style={styles.krMiniInput}
-                                defaultValue={t.main_owner || ""}
-                                placeholder="姓名"
-                                onBlur={async (e) => {
-                                  const v = (e.target.value || "").trim() || null;
-                                  const ok = await updateTask(t.id, { main_owner: v });
-                                  if (ok) await loadAll();
-                                }}
-                              />
-                            ) : (
-                              <span style={styles.krSubValue}>{taskOwnerLabel(t)}</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                        <div style={{ minWidth: 160 }}>
-                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                            <Chip tone={t.progress_percent >= 80 ? "green" : t.progress_percent >= 40 ? "blue" : "violet"}>
-                              进度 {t.progress_percent ?? 0}%
-                            </Chip>
-                          </div>
-                          <ProgressBar value={t.progress_percent ?? 0} />
-                        </div>
-
-                        {isEditing ? (
-                          <div style={styles.taskProgressEdit}>
-                            <span style={styles.krSubLabel}>进度：</span>
-                            <input
-                              style={styles.krNumInput}
-                              type="number"
-                              defaultValue={t.progress_percent ?? 0}
-                              onBlur={async (e) => {
-                                const p = safeInt(e.target.value, 0);
-                                const ok = await updateTask(t.id, { progress_percent: p });
-                                if (ok) await loadAll();
-                              }}
-                            />
-                          </div>
-                        ) : null}
-
-                        <Button variant="ghost" onClick={() => setOpenTaskId(isOpen ? null : t.id)}>
-                          {isOpen ? "收起复盘" : "复盘"}
-                        </Button>
-
-                        {isEditing ? (
-                          <MoreMenu
-                            menuKey={`task:${t.id}`}
-                            items={[{ label: "删除 Task", danger: true, onClick: () => deleteTask(t.id) }]}
-                          />
-                        ) : null}
-                      </div>
-                    </div>
-
-                    {/* Task checkin accordion */}
-                    {isOpen ? (
-                      <div style={{ marginTop: 12, ...styles.taskCheckinBox }}>
-                        <div style={styles.sectionTitle}>Task 月度复盘</div>
-
-                        {isEditing ? (
-                          <>
-                            <div style={styles.grid3}>
-                              <div>
-                                <div style={styles.label}>月份</div>
-                                <input
-                                  style={styles.input}
-                                  type="month"
-                                  value={ckDraft.month}
-                                  onChange={(e) => setTaskCkDraft(t.id, { month: e.target.value })}
-                                />
-                              </div>
-                              <div>
-                                <div style={styles.label}>本月实际值（可选）</div>
-                                <input
-                                  style={styles.input}
-                                  type="number"
-                                  placeholder="例如：5000000"
-                                  value={ckDraft.value}
-                                  onChange={(e) => setTaskCkDraft(t.id, { value: e.target.value })}
-                                />
-                              </div>
-                              <div>
-                                <div style={styles.label}>备注（可选）</div>
-                                <input
-                                  style={styles.input}
-                                  placeholder="例如：本月已完成 A/B 测试并上线"
-                                  value={ckDraft.note}
-                                  onChange={(e) => setTaskCkDraft(t.id, { note: e.target.value })}
-                                />
-                              </div>
-                            </div>
-
-                            {ckDraft.error ? <div style={styles.toastErr}>{ckDraft.error}</div> : null}
-
-                            <Button onClick={() => upsertTaskCheckin(t)} disabled={ckDraft.saving}>
-                              {ckDraft.saving ? "记录中..." : "记录/覆盖当月复盘"}
-                            </Button>
-                          </>
-                        ) : (
-                          <div style={styles.muted}>
-                            只读模式：如需录入/编辑复盘，请先在该 O 右上角点击「修改」进入编辑模式。
-                          </div>
-                        )}
-
-                        <div style={{ marginTop: 14 }}>
-                          <div style={styles.sectionTitle}>历史复盘</div>
-
-                          {history.length ? (
-                            <div style={{ marginTop: 10 }}>
-                              {history.map((h) => (
-                                <div key={h.id} style={styles.checkinRow}>
-                                  <div style={{ width: 92 }}>
-                                    <Chip tone="violet">{String(h.month).slice(0, 7)}</Chip>
-                                  </div>
-
-                                  {!isEditing ? (
-                                    <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-                                      <div>
-                                        <span style={styles.muted}>值：</span>
-                                        <b>{h.value === null ? "-" : formatNumber(h.value)}</b>
-                                      </div>
-                                      {h.note ? (
-                                        <div style={{ maxWidth: 640 }}>
-                                          <span style={styles.muted}>备注：</span>
-                                          <span>{h.note}</span>
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  ) : (
-                                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                                      <span style={styles.muted}>值：</span>
-                                      <input
-                                        style={styles.inlineInput}
-                                        type="number"
-                                        defaultValue={h.value ?? ""}
-                                        placeholder="可空"
-                                        onBlur={async (e) => {
-                                          const v = e.target.value;
-                                          const n = v === "" ? null : safeNumber(v);
-                                          if (v !== "" && n === null) return alert("请输入数字或留空");
-                                          const ok = await updateTaskCheckin(h.id, { value: n });
-                                          if (ok) await loadAll();
-                                        }}
-                                      />
-
-                                      <span style={styles.muted}>备注：</span>
-                                      <input
-                                        style={{ ...styles.inlineInput, width: 360 }}
-                                        defaultValue={h.note || ""}
-                                        onBlur={async (e) => {
-                                          const ok = await updateTaskCheckin(h.id, { note: e.target.value });
-                                          if (ok) await loadAll();
-                                        }}
-                                      />
-
-                                      <MoreMenu
-                                        menuKey={`tck:${h.id}`}
-                                        items={[{ label: "删除复盘", danger: true, onClick: () => deleteTaskCheckin(h.id) }]}
-                                      />
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div style={{ marginTop: 10, ...styles.muted }}>暂无复盘记录</div>
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                );
-              })
-            ) : (
-              <div style={styles.muted}>暂无 Task（建议每条 KR 拆成若干具体任务）</div>
-            )}
-          </div>
-        </div>
-
-        {/* Add task */}
-        <div style={{ marginTop: 14, ...styles.subPanel }}>
-          <div style={styles.sectionTitle}>新增 Task</div>
-
-          {isEditing ? (
-            <>
-              <div style={{ marginTop: 10 }} />
-              <div style={styles.formRow}>
-                <div style={{ flex: 2 }}>
-                  <div style={styles.label}>Task 描述</div>
-                  <input
-                    style={styles.input}
-                    placeholder="例如：完成货架电商 SOP（流程/模板/培训）"
-                    value={draft.title}
-                    onChange={(e) => setTaskDraft(kr.id, { title: e.target.value })}
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <div style={styles.label}>负责人</div>
-                  <input
-                    style={styles.input}
-                    placeholder="例如：张三"
-                    value={draft.main_owner}
-                    onChange={(e) => setTaskDraft(kr.id, { main_owner: e.target.value })}
-                  />
-                </div>
-                <div style={{ width: 140 }}>
-                  <div style={styles.label}>进度(0-100)</div>
-                  <input
-                    style={styles.input}
-                    type="number"
-                    value={draft.progress}
-                    onChange={(e) => setTaskDraft(kr.id, { progress: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              {draft.error ? <div style={styles.toastErr}>{draft.error}</div> : null}
-
-              <Button onClick={() => addTask(kr.id)} disabled={draft.saving}>
-                {draft.saving ? "新增中..." : "新增 Task"}
-              </Button>
-            </>
-          ) : (
-            <div style={styles.muted}>只读模式：请先进入编辑模式再新增 Task。</div>
-          )}
         </div>
       </div>
     );
@@ -1215,16 +1213,22 @@ export default function App() {
           <div style={styles.logoOrb} />
           <div>
             <div style={styles.appTitle}>OKR Nexus</div>
-            <div style={styles.appSub}>O → KR → Task · Task 月度复盘</div>
+            <div style={styles.appSub}>O → KR → Task · 月度复盘 · 关系树</div>
           </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={styles.tabs}>
-            <button style={page === "list" ? styles.tabActive : styles.tab} onClick={() => setPage("list")}>
+            <button
+              style={page === "list" ? styles.tabActive : styles.tab}
+              onClick={() => setPage("list")}
+            >
               列表
             </button>
-            <button style={page === "tree" ? styles.tabActive : styles.tab} onClick={() => setPage("tree")}>
+            <button
+              style={page === "tree" ? styles.tabActive : styles.tab}
+              onClick={() => setPage("tree")}
+            >
               关系树
             </button>
           </div>
@@ -1245,12 +1249,15 @@ export default function App() {
             <div style={styles.panelHeaderRow}>
               <div>
                 <div style={styles.h3}>Objective</div>
-                <div style={styles.muted}>建议：O 只写方向；KR 拆 Task；复盘写在 Task 上</div>
+                <div style={styles.muted}>建议：一条 O 配 2–4 条 KR；KR 再拆 Task</div>
               </div>
 
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {loading ? <Chip tone="violet">同步中</Chip> : <Chip tone="gray">在线</Chip>}
-                <Button variant={showNewO ? "soft" : "primary"} onClick={() => setShowNewO((v) => !v)}>
+                <Button
+                  variant={showNewO ? "soft" : "primary"}
+                  onClick={() => setShowNewO((v) => !v)}
+                >
                   {showNewO ? "收起" : "＋ 新建 Objective"}
                 </Button>
               </div>
@@ -1277,11 +1284,12 @@ export default function App() {
                       onChange={(e) => setNewOMainOwner(e.target.value)}
                     />
                   </div>
-                  <div style={{ width: 140 }}>
-                    <div style={styles.label}>进度(0-100)</div>
+                  <div style={{ width: 160 }}>
+                    <div style={styles.label}>进度（手填 %）</div>
                     <input
                       style={styles.input}
                       type="number"
+                      placeholder="0-100"
                       value={newOProgress}
                       onChange={(e) => setNewOProgress(e.target.value)}
                     />
@@ -1304,9 +1312,7 @@ export default function App() {
               krDrafts[o.id] || {
                 title: "",
                 main_owner: "",
-                target: "",
-                current: "",
-                progress: "0",
+                progress: "",
                 error: "",
                 saving: false,
               };
@@ -1319,7 +1325,11 @@ export default function App() {
                     <div style={styles.oTitleRow}>
                       <span style={styles.oIndex}>{`O${idx + 1}`}</span>
                       {isEditing ? (
-                        <input style={styles.titleInput} defaultValue={o.title} onBlur={(e) => updateTitle(o.id, e.target.value)} />
+                        <input
+                          style={styles.titleInput}
+                          defaultValue={o.title}
+                          onBlur={(e) => updateTitle(o.id, e.target.value)}
+                        />
                       ) : (
                         <span style={styles.oTitleText}>{o.title}</span>
                       )}
@@ -1327,13 +1337,15 @@ export default function App() {
 
                     <div style={styles.oMetaRow}>
                       <Chip tone="gray">负责人：{ownerLabel(o)}</Chip>
-                      <Chip tone="blue">进度：{o.progress_percent ?? 0}%</Chip>
-                      {isEditing ? <span style={styles.muted}>（编辑后点空白处自动保存）</span> : null}
+                      <Chip tone="blue">进度：{manualProgressLabel(o.progress_manual)}%</Chip>
+                      {isEditing ? (
+                        <span style={styles.muted}>（编辑：输入后点空白处自动保存）</span>
+                      ) : null}
                     </div>
 
                     {isEditing ? (
                       <div style={{ marginTop: 10, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                        <div style={{ width: 360 }}>
+                        <div style={{ maxWidth: 320, flex: 1 }}>
                           <div style={styles.label}>主要负责人（可修改）</div>
                           <input
                             style={styles.input}
@@ -1343,12 +1355,12 @@ export default function App() {
                           />
                         </div>
                         <div style={{ width: 160 }}>
-                          <div style={styles.label}>O 进度（手填）</div>
+                          <div style={styles.label}>O 进度（手填 %）</div>
                           <input
                             style={styles.input}
                             type="number"
-                            defaultValue={o.progress_percent ?? 0}
-                            onBlur={(e) => updateProgress(o.id, e.target.value)}
+                            defaultValue={manualProgressLabel(o.progress_manual)}
+                            onBlur={(e) => updateManualProgressOnItem(o.id, e.target.value)}
                           />
                         </div>
                       </div>
@@ -1361,7 +1373,6 @@ export default function App() {
                       onClick={() => {
                         setMenuOpenKey(null);
                         setEditingOId(isEditing ? null : o.id);
-                        // 关闭弹窗时不强制
                         if (isEditing && krModal) setKrModal({ ...krModal, isEditing: false });
                       }}
                     >
@@ -1372,23 +1383,28 @@ export default function App() {
                       <MoreMenu
                         menuKey={`o:${o.id}`}
                         items={[
-                          { label: "删除 O", danger: true, onClick: () => deleteItem(o.id, `O${idx + 1}`) },
+                          {
+                            label: "删除 O",
+                            danger: true,
+                            onClick: () => deleteItem(o.id, `O${idx + 1}`),
+                          },
                         ]}
                       />
                     ) : null}
                   </div>
                 </div>
 
-                {/* KR List */}
+                {/* KR Compact List */}
                 <div style={{ marginTop: 12 }}>
                   <div style={styles.sectionTitle}>KR</div>
 
                   {o.krs.length ? (
                     <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                       {o.krs.map((k, kIdx) => {
-                        const p = k.progress_percent ?? 0;
-                        const tone = p >= 80 ? "green" : p >= 40 ? "blue" : "violet";
-                        const taskCount = (tasksByKr[k.id] || []).length;
+                        const progress = manualProgressLabel(k.progress_manual);
+                        const tone =
+                          progress >= 80 ? "green" : progress >= 40 ? "blue" : "violet";
+                        const countTasks = (tasksByKr[k.id] || []).length;
 
                         return (
                           <div key={k.id} style={styles.krCompactRow}>
@@ -1406,7 +1422,6 @@ export default function App() {
                                     {k.title}
                                   </div>
                                 )}
-
                                 <div style={styles.krSubLine}>
                                   <span style={styles.krSubLabel}>负责人：</span>
                                   {isEditing ? (
@@ -1419,9 +1434,10 @@ export default function App() {
                                   ) : (
                                     <span style={styles.krSubValue}>{ownerLabel(k)}</span>
                                   )}
-
-                                  <span style={{ ...styles.krSubLabel, marginLeft: 10 }}>任务：</span>
-                                  <span style={styles.krSubValue}>{taskCount}</span>
+                                  <span style={{ ...styles.krSubLabel, marginLeft: 10 }}>
+                                    Task：
+                                  </span>
+                                  <span style={styles.krSubValue}>{countTasks}</span>
                                 </div>
                               </div>
                             </div>
@@ -1429,54 +1445,23 @@ export default function App() {
                             <div style={styles.krRight}>
                               <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 180 }}>
                                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                                  <Chip tone={tone}>进度 {p}%</Chip>
+                                  <Chip tone={tone}>进度 {progress}%</Chip>
                                 </div>
-                                <ProgressBar value={p} />
+                                <ProgressBar value={Math.min(100, progress)} />
                               </div>
 
-                              {isEditing ? (
-                                <div style={styles.krNums}>
-                                  <div style={styles.krNumBlock}>
-                                    <div style={styles.krNumLabel}>KR 进度</div>
-                                    <input
-                                      style={styles.krNumInput}
-                                      type="number"
-                                      defaultValue={p}
-                                      onBlur={(e) => updateProgress(k.id, e.target.value)}
-                                    />
-                                  </div>
-                                </div>
-                              ) : null}
-
-                              {/* 保留 target/current，但不自动算 */}
                               <div style={styles.krNums}>
                                 <div style={styles.krNumBlock}>
-                                  <div style={styles.krNumLabel}>目标</div>
+                                  <div style={styles.krNumLabel}>KR 进度（手填）</div>
                                   {isEditing ? (
                                     <input
                                       style={styles.krNumInput}
                                       type="number"
-                                      defaultValue={k.target_value ?? ""}
-                                      placeholder="可空"
-                                      onBlur={(e) => updateKRTarget(k.id, e.target.value)}
+                                      defaultValue={progress}
+                                      onBlur={(e) => updateManualProgressOnItem(k.id, e.target.value)}
                                     />
                                   ) : (
-                                    <div style={styles.krNumValue}>{k.target_value === null ? "-" : formatNumber(k.target_value)}</div>
-                                  )}
-                                </div>
-
-                                <div style={styles.krNumBlock}>
-                                  <div style={styles.krNumLabel}>当前</div>
-                                  {isEditing ? (
-                                    <input
-                                      style={styles.krNumInput}
-                                      type="number"
-                                      defaultValue={k.current_value ?? ""}
-                                      placeholder="可空"
-                                      onBlur={(e) => updateKRCurrent(k.id, e.target.value)}
-                                    />
-                                  ) : (
-                                    <div style={styles.krNumValue}>{k.current_value === null ? "-" : formatNumber(k.current_value)}</div>
+                                    <div style={styles.krNumValue}>{progress}%</div>
                                   )}
                                 </div>
                               </div>
@@ -1485,18 +1470,21 @@ export default function App() {
                                 variant="ghost"
                                 onClick={() => {
                                   setMenuOpenKey(null);
-                                  setOpenTaskId(null);
                                   setKrModal({ kr: k, isEditing });
                                 }}
                               >
-                                任务/复盘
+                                复盘
                               </Button>
 
                               {isEditing ? (
                                 <MoreMenu
                                   menuKey={`kr:${k.id}`}
                                   items={[
-                                    { label: "删除 KR", danger: true, onClick: () => deleteItem(k.id, `KR${kIdx + 1}`) },
+                                    {
+                                      label: "删除 KR",
+                                      danger: true,
+                                      onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
+                                    },
                                   ]}
                                 />
                               ) : null}
@@ -1506,7 +1494,9 @@ export default function App() {
                       })}
                     </div>
                   ) : (
-                    <div style={{ marginTop: 10, ...styles.muted }}>还没有 KR（建议先拆出 KR，再在 KR 里拆 Task）</div>
+                    <div style={{ marginTop: 10, ...styles.muted }}>
+                      还没有 KR（建议先拆 2–4 条 KR，再拆 Task）
+                    </div>
                   )}
                 </div>
 
@@ -1535,36 +1525,14 @@ export default function App() {
                             onChange={(e) => setKRDraft(o.id, { main_owner: e.target.value })}
                           />
                         </div>
-                        <div style={{ width: 140 }}>
-                          <div style={styles.label}>进度(0-100)</div>
+                        <div style={{ width: 160 }}>
+                          <div style={styles.label}>进度（手填 %）</div>
                           <input
                             style={styles.input}
                             type="number"
+                            placeholder="0-100"
                             value={krDraft.progress}
                             onChange={(e) => setKRDraft(o.id, { progress: e.target.value })}
-                          />
-                        </div>
-                      </div>
-
-                      <div style={styles.grid2}>
-                        <div>
-                          <div style={styles.label}>目标值（可选）</div>
-                          <input
-                            style={styles.input}
-                            type="number"
-                            placeholder="例如：26000000"
-                            value={krDraft.target}
-                            onChange={(e) => setKRDraft(o.id, { target: e.target.value })}
-                          />
-                        </div>
-                        <div>
-                          <div style={styles.label}>当前值（可选）</div>
-                          <input
-                            style={styles.input}
-                            type="number"
-                            placeholder="例如：5000000"
-                            value={krDraft.current}
-                            onChange={(e) => setKRDraft(o.id, { current: e.target.value })}
                           />
                         </div>
                       </div>
@@ -1586,20 +1554,16 @@ export default function App() {
       {/* KR Modal */}
       <Modal
         open={!!krModal}
-        title={
-          krModal
-            ? `KR｜任务与复盘（负责人：${ownerLabel(krModal.kr)}）`
-            : ""
-        }
+        title={krModal ? `复盘｜${krModal.kr.title}（负责人：${ownerLabel(krModal.kr)}）` : ""}
         onClose={() => setKrModal(null)}
       >
-        {krModal ? <KRTasksModal kr={krModal.kr} isEditing={krModal.isEditing} /> : null}
+        {krModal ? <KRTaskCheckinModal kr={krModal.kr} isEditing={krModal.isEditing} /> : null}
       </Modal>
 
       <div style={styles.footer}>
         <span style={{ opacity: 0.7 }}>OKR Nexus</span>
         <span style={{ opacity: 0.35 }}>·</span>
-        <span style={{ opacity: 0.55 }}>O/KR/Task · Tahoe Light UI</span>
+        <span style={{ opacity: 0.55 }}>Tahoe Light UI</span>
       </div>
     </div>
   );
@@ -1607,8 +1571,13 @@ export default function App() {
 
 /* ----------------------------- Tahoe Light Styles ----------------------------- */
 const styles = {
-  container: { maxWidth: 1180, margin: "22px auto", padding: "0 16px 36px" },
+  container: {
+    maxWidth: 1180,
+    margin: "22px auto",
+    padding: "0 16px 36px",
+  },
 
+  // Topbar (light glass)
   topbar: {
     display: "flex",
     justifyContent: "space-between",
@@ -1633,8 +1602,17 @@ const styles = {
     boxShadow: "0 10px 20px rgba(0,122,255,0.15)",
     border: "1px solid rgba(15,23,42,0.08)",
   },
-  appTitle: { fontWeight: 800, letterSpacing: 0.2, fontSize: 16, color: "#0B1220" },
-  appSub: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.55)" },
+  appTitle: {
+    fontWeight: 800,
+    letterSpacing: 0.2,
+    fontSize: 16,
+    color: "#0B1220",
+  },
+  appSub: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "rgba(11,18,32,0.55)",
+  },
 
   tabs: {
     display: "flex",
@@ -1663,6 +1641,7 @@ const styles = {
     background: "rgba(0,122,255,0.10)",
   },
 
+  // Panels
   panel: {
     marginTop: 14,
     borderRadius: 18,
@@ -1686,11 +1665,27 @@ const styles = {
     flexWrap: "wrap",
   },
 
-  h3: { fontWeight: 800, fontSize: 15, margin: 0 },
-  sectionTitle: { fontWeight: 800, color: "rgba(11,18,32,0.92)" },
-  muted: { color: "rgba(11,18,32,0.56)", fontSize: 12 },
+  // Typography
+  h3: {
+    fontWeight: 800,
+    fontSize: 15,
+    margin: 0,
+  },
+  sectionTitle: {
+    fontWeight: 800,
+    color: "rgba(11,18,32,0.92)",
+  },
+  muted: {
+    color: "rgba(11,18,32,0.56)",
+    fontSize: 12,
+  },
 
-  label: { fontSize: 12, color: "rgba(11,18,32,0.62)", marginBottom: 6 },
+  // Inputs
+  label: {
+    fontSize: 12,
+    color: "rgba(11,18,32,0.62)",
+    marginBottom: 6,
+  },
   input: {
     width: "100%",
     padding: "10px 12px",
@@ -1711,15 +1706,31 @@ const styles = {
     outline: "none",
   },
 
-  btnBase: { border: "1px solid transparent", borderRadius: 12, padding: "10px 12px", fontWeight: 800 },
+  // Buttons (Tahoe)
+  btnBase: {
+    border: "1px solid transparent",
+    borderRadius: 12,
+    padding: "10px 12px",
+    fontWeight: 800,
+    transition: "transform 100ms ease, box-shadow 120ms ease",
+  },
   btnPrimary: {
     color: "#ffffff",
     background: "linear-gradient(180deg, rgba(0,122,255,0.95), rgba(0,122,255,0.78))",
     boxShadow: "0 10px 18px rgba(0,122,255,0.18)",
   },
-  btnSoft: { color: "#0B1220", background: "rgba(15,23,42,0.06)", border: "1px solid rgba(15,23,42,0.10)" },
-  btnGhost: { color: "#0B1220", background: "rgba(255,255,255,0.65)", border: "1px solid rgba(15,23,42,0.10)" },
+  btnSoft: {
+    color: "#0B1220",
+    background: "rgba(15,23,42,0.06)",
+    border: "1px solid rgba(15,23,42,0.10)",
+  },
+  btnGhost: {
+    color: "#0B1220",
+    background: "rgba(255,255,255,0.65)",
+    border: "1px solid rgba(15,23,42,0.10)",
+  },
 
+  // Chips
   chip: {
     display: "inline-flex",
     alignItems: "center",
@@ -1731,9 +1742,21 @@ const styles = {
     background: "rgba(255,255,255,0.75)",
   },
   chipGray: { color: "rgba(11,18,32,0.78)" },
-  chipBlue: { color: "#0A66FF", background: "rgba(0,122,255,0.10)", border: "1px solid rgba(0,122,255,0.18)" },
-  chipGreen: { color: "#0E7A2A", background: "rgba(52,199,89,0.10)", border: "1px solid rgba(52,199,89,0.18)" },
-  chipViolet: { color: "#6E3BC6", background: "rgba(175,82,222,0.10)", border: "1px solid rgba(175,82,222,0.18)" },
+  chipBlue: {
+    color: "#0A66FF",
+    background: "rgba(0,122,255,0.10)",
+    border: "1px solid rgba(0,122,255,0.18)",
+  },
+  chipGreen: {
+    color: "#0E7A2A",
+    background: "rgba(52,199,89,0.10)",
+    border: "1px solid rgba(52,199,89,0.18)",
+  },
+  chipViolet: {
+    color: "#6E3BC6",
+    background: "rgba(175,82,222,0.10)",
+    border: "1px solid rgba(175,82,222,0.18)",
+  },
 
   toastErr: {
     marginTop: 10,
@@ -1746,7 +1769,13 @@ const styles = {
     fontWeight: 800,
   },
 
-  progressTrack: { height: 6, borderRadius: 999, background: "rgba(15,23,42,0.08)", overflow: "hidden" },
+  // Progress bar (thin, macOS style)
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    background: "rgba(15,23,42,0.08)",
+    overflow: "hidden",
+  },
   progressFill: {
     height: "100%",
     borderRadius: 999,
@@ -1755,8 +1784,19 @@ const styles = {
     boxShadow: "0 6px 16px rgba(0,122,255,0.16)",
   },
 
-  oHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 },
-  oTitleRow: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
+  // O header
+  oHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  oTitleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+  },
   oIndex: {
     display: "inline-flex",
     alignItems: "center",
@@ -1769,8 +1809,21 @@ const styles = {
     color: "#0B1220",
     fontWeight: 900,
   },
-  oTitleText: { fontWeight: 800, fontSize: 16, color: "#0B1220", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" },
-  oMetaRow: { marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" },
+  oTitleText: {
+    fontWeight: 800,
+    fontSize: 16,
+    color: "#0B1220",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  oMetaRow: {
+    marginTop: 10,
+    display: "flex",
+    gap: 10,
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
   titleInput: {
     width: "min(680px, 70vw)",
     padding: "9px 10px",
@@ -1781,6 +1834,7 @@ const styles = {
     fontWeight: 800,
   },
 
+  // Compact KR row
   krCompactRow: {
     display: "flex",
     justifyContent: "space-between",
@@ -1790,7 +1844,13 @@ const styles = {
     border: "1px solid rgba(15,23,42,0.10)",
     background: "rgba(255,255,255,0.70)",
   },
-  krLeft: { display: "flex", gap: 10, alignItems: "flex-start", minWidth: 0, flex: 1.3 },
+  krLeft: {
+    display: "flex",
+    gap: 10,
+    alignItems: "flex-start",
+    minWidth: 0,
+    flex: 1.3,
+  },
   krBadge: {
     display: "inline-flex",
     alignItems: "center",
@@ -1804,7 +1864,14 @@ const styles = {
     fontWeight: 900,
     color: "rgba(11,18,32,0.85)",
   },
-  krTitleText: { fontWeight: 800, color: "#0B1220", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 520 },
+  krTitleText: {
+    fontWeight: 800,
+    color: "#0B1220",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: 520,
+  },
   krTitleInput: {
     width: "min(560px, 52vw)",
     padding: "7px 10px",
@@ -1814,9 +1881,23 @@ const styles = {
     outline: "none",
     fontWeight: 800,
   },
-  krSubLine: { marginTop: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
-  krSubLabel: { fontSize: 12, color: "rgba(11,18,32,0.55)", fontWeight: 700 },
-  krSubValue: { fontSize: 12, color: "rgba(11,18,32,0.78)", fontWeight: 800 },
+  krSubLine: {
+    marginTop: 6,
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  krSubLabel: {
+    fontSize: 12,
+    color: "rgba(11,18,32,0.55)",
+    fontWeight: 700,
+  },
+  krSubValue: {
+    fontSize: 12,
+    color: "rgba(11,18,32,0.78)",
+    fontWeight: 800,
+  },
   krMiniInput: {
     width: 120,
     padding: "6px 8px",
@@ -1827,13 +1908,38 @@ const styles = {
     fontSize: 12,
     fontWeight: 800,
   },
-  krRight: { display: "flex", alignItems: "center", gap: 10, flex: 1, justifyContent: "flex-end", flexWrap: "wrap" },
-  krNums: { display: "flex", gap: 8, alignItems: "center" },
-  krNumBlock: { minWidth: 92, padding: "6px 10px", borderRadius: 12, border: "1px solid rgba(15,23,42,0.10)", background: "rgba(15,23,42,0.03)" },
-  krNumLabel: { fontSize: 11, color: "rgba(11,18,32,0.55)", fontWeight: 800 },
-  krNumValue: { marginTop: 2, fontWeight: 900, color: "#0B1220" },
+  krRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+  },
+  krNums: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+  },
+  krNumBlock: {
+    minWidth: 120,
+    padding: "6px 10px",
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(15,23,42,0.03)",
+  },
+  krNumLabel: {
+    fontSize: 11,
+    color: "rgba(11,18,32,0.55)",
+    fontWeight: 800,
+  },
+  krNumValue: {
+    marginTop: 2,
+    fontWeight: 900,
+    color: "#0B1220",
+  },
   krNumInput: {
-    width: 92,
+    width: 120,
     marginTop: 2,
     padding: "6px 8px",
     borderRadius: 10,
@@ -1843,10 +1949,20 @@ const styles = {
     fontWeight: 900,
   },
 
-  grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 },
-  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12 },
-  formRow: { display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" },
+  // Layout helpers
+  grid2: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
+  },
+  formRow: {
+    display: "flex",
+    gap: 12,
+    alignItems: "flex-end",
+    flexWrap: "wrap",
+  },
 
+  // Menu
   iconBtn: {
     width: 40,
     height: 36,
@@ -1870,12 +1986,44 @@ const styles = {
     zIndex: 20,
     backdropFilter: "blur(12px)",
   },
-  menuItem: { width: "100%", textAlign: "left", padding: "10px 10px", border: "none", background: "transparent", borderRadius: 12, cursor: "pointer", fontSize: 14, color: "rgba(11,18,32,0.90)", fontWeight: 700 },
-  menuItemDanger: { width: "100%", textAlign: "left", padding: "10px 10px", border: "none", background: "transparent", borderRadius: 12, cursor: "pointer", fontSize: 14, color: "rgba(190, 30, 30, 0.95)", fontWeight: 900 },
+  menuItem: {
+    width: "100%",
+    textAlign: "left",
+    padding: "10px 10px",
+    border: "none",
+    background: "transparent",
+    borderRadius: 12,
+    cursor: "pointer",
+    fontSize: 14,
+    color: "rgba(11,18,32,0.90)",
+    fontWeight: 700,
+  },
+  menuItemDanger: {
+    width: "100%",
+    textAlign: "left",
+    padding: "10px 10px",
+    border: "none",
+    background: "transparent",
+    borderRadius: 12,
+    cursor: "pointer",
+    fontSize: 14,
+    color: "rgba(190, 30, 30, 0.95)",
+    fontWeight: 900,
+  },
 
-  modalMask: { position: "fixed", inset: 0, background: "rgba(15,23,42,0.25)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 50 },
+  // Modal
+  modalMask: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15,23,42,0.25)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 50,
+  },
   modal: {
-    width: "min(1040px, 96vw)",
+    width: "min(1100px, 96vw)",
     maxHeight: "86vh",
     overflow: "auto",
     background: "rgba(255,255,255,0.92)",
@@ -1884,19 +2032,50 @@ const styles = {
     boxShadow: "0 28px 70px rgba(15,23,42,0.18)",
     backdropFilter: "blur(16px)",
   },
-  modalHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 12px 10px 12px", borderBottom: "1px solid rgba(15,23,42,0.10)" },
-  modalTitle: { fontWeight: 900, color: "#0B1220" },
+  modalHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: "12px 12px 10px 12px",
+    borderBottom: "1px solid rgba(15,23,42,0.10)",
+  },
+  modalTitle: {
+    fontWeight: 900,
+    color: "#0B1220",
+  },
   modalBody: { padding: 12 },
 
-  checkinRow: { display: "flex", alignItems: "flex-start", gap: 10, padding: "12px 0", borderBottom: "1px solid rgba(15,23,42,0.08)" },
-
-  taskCard: {
+  modalSummaryBar: {
+    borderRadius: 16,
     padding: 12,
+    background: "rgba(0,122,255,0.06)",
+    border: "1px solid rgba(0,122,255,0.10)",
+  },
+
+  // Checkins
+  checkinRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 10,
+    padding: "12px 0",
+    borderBottom: "1px solid rgba(15,23,42,0.08)",
+  },
+
+  // Task UI
+  taskCard: {
     borderRadius: 16,
     border: "1px solid rgba(15,23,42,0.10)",
-    background: "rgba(255,255,255,0.75)",
+    background: "rgba(255,255,255,0.78)",
+    padding: 12,
+    boxShadow: "0 10px 22px rgba(15,23,42,0.05)",
   },
-  taskTopRow: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" },
+  taskTopRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+    flexWrap: "wrap",
+  },
   taskBadge: {
     display: "inline-flex",
     alignItems: "center",
@@ -1908,46 +2087,176 @@ const styles = {
     background: "rgba(175,82,222,0.10)",
     border: "1px solid rgba(175,82,222,0.18)",
     fontWeight: 900,
+    color: "rgba(11,18,32,0.90)",
   },
-  taskTitleText: { fontWeight: 900, color: "#0B1220", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 520 },
+  taskTitleText: {
+    fontWeight: 900,
+    color: "#0B1220",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: 640,
+  },
   taskTitleInput: {
-    width: "min(520px, 60vw)",
+    width: "min(720px, 70vw)",
     padding: "7px 10px",
     borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.12)",
+    background: "rgba(255,255,255,0.90)",
+    outline: "none",
+    fontWeight: 900,
+  },
+  taskMetaLine: {
+    marginTop: 6,
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+  },
+  taskProgressInput: {
+    width: 92,
+    padding: "6px 8px",
+    borderRadius: 10,
     border: "1px solid rgba(15,23,42,0.12)",
     background: "rgba(255,255,255,0.92)",
     outline: "none",
     fontWeight: 900,
   },
-  taskSubLine: { marginTop: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
-  taskProgressEdit: { display: "flex", alignItems: "center", gap: 8 },
 
-  taskCheckinBox: { marginTop: 12, paddingTop: 12, borderTop: "1px dashed rgba(15,23,42,0.14)" },
-
-  treeTopBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12, flexWrap: "wrap" },
-  zoomBar: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" },
-  treeWrap: { position: "relative", overflow: "auto", borderRadius: 18, background: "rgba(255,255,255,0.65)", border: "1px solid rgba(15,23,42,0.10)", height: "72vh" },
-  treeWrapFullscreen: { position: "relative", overflow: "auto", borderRadius: 0, background: "rgba(255,255,255,0.92)", border: "none", width: "100%", height: "100%" },
-  treeSvg: { position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" },
-  treeLevel: { position: "relative", display: "flex", justifyContent: "center", zIndex: 1 },
-  treeRow: { display: "flex", gap: 24, justifyContent: "center", alignItems: "flex-start", flexWrap: "nowrap" },
+  // Tree
+  treeTopBar: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 12,
+    flexWrap: "wrap",
+  },
+  zoomBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+  treeWrap: {
+    position: "relative",
+    overflow: "auto",
+    borderRadius: 18,
+    background: "rgba(255,255,255,0.65)",
+    border: "1px solid rgba(15,23,42,0.10)",
+    height: "72vh",
+  },
+  treeWrapFullscreen: {
+    position: "relative",
+    overflow: "auto",
+    borderRadius: 0,
+    background: "rgba(255,255,255,0.92)",
+    border: "none",
+    width: "100%",
+    height: "100%",
+  },
+  treeLevel: {
+    position: "relative",
+    display: "flex",
+    justifyContent: "center",
+    zIndex: 1,
+  },
+  treeRow: {
+    display: "flex",
+    gap: 24,
+    justifyContent: "center",
+    alignItems: "flex-start",
+    flexWrap: "nowrap",
+  },
   krCol: { display: "flex", flexDirection: "column", gap: 12, minWidth: 260 },
-  nodeCard: { width: 260, borderRadius: 18, border: "1px solid rgba(15,23,42,0.10)", background: "rgba(255,255,255,0.80)", padding: 14, boxShadow: "0 10px 26px rgba(15,23,42,0.06)" },
+
+  nodeCard: {
+    width: 260,
+    borderRadius: 18,
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(255,255,255,0.80)",
+    padding: 14,
+    boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
+  },
   nodeRoot: { width: 320 },
-  nodeTitle: { fontWeight: 900, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 },
-  nodeGlyph: { display: "inline-flex", width: 26, height: 26, borderRadius: 10, alignItems: "center", justifyContent: "center", background: "rgba(0,122,255,0.10)", border: "1px solid rgba(0,122,255,0.16)", fontWeight: 900 },
-  nodeSub: { color: "rgba(11,18,32,0.86)", fontSize: 13, marginBottom: 10, lineHeight: 1.35, maxHeight: 44, overflow: "hidden", textOverflow: "ellipsis" },
+  nodeTitle: {
+    fontWeight: 900,
+    fontSize: 15,
+    marginBottom: 8,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  nodeGlyph: {
+    display: "inline-flex",
+    width: 26,
+    height: 26,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(0,122,255,0.10)",
+    border: "1px solid rgba(0,122,255,0.16)",
+    fontWeight: 900,
+  },
+  nodeSub: {
+    color: "rgba(11,18,32,0.86)",
+    fontSize: 13,
+    marginBottom: 10,
+    lineHeight: 1.35,
+    maxHeight: 44,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
   nodeSubSmall: { color: "rgba(11,18,32,0.58)", fontSize: 12 },
-  nodeMeta: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, borderTop: "1px solid rgba(15,23,42,0.08)", paddingTop: 10, marginBottom: 10 },
+  nodeMeta: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    borderTop: "1px solid rgba(15,23,42,0.08)",
+    paddingTop: 10,
+    marginBottom: 10,
+  },
   nodeMetaLeft: { color: "rgba(11,18,32,0.58)", fontSize: 12, fontWeight: 700 },
   nodeProgress: { fontWeight: 900, color: "rgba(11,18,32,0.85)" },
 
-  center: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 },
-  loginCard: { width: "min(560px, 92vw)", borderRadius: 22, padding: 18, background: "rgba(255,255,255,0.90)", border: "1px solid rgba(15,23,42,0.10)", boxShadow: "0 30px 70px rgba(15,23,42,0.12)", backdropFilter: "blur(16px)" },
+  // Login
+  center: {
+    minHeight: "100vh",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  loginCard: {
+    width: "min(560px, 92vw)",
+    borderRadius: 22,
+    padding: 18,
+    background: "rgba(255,255,255,0.90)",
+    border: "1px solid rgba(15,23,42,0.10)",
+    boxShadow: "0 30px 70px rgba(15,23,42,0.12)",
+    backdropFilter: "blur(16px)",
+  },
   brandRow: { display: "flex", alignItems: "center", gap: 12 },
-  brandMark: { width: 44, height: 44, borderRadius: 16, background: "radial-gradient(circle at 30% 30%, rgba(0,122,255,0.9), rgba(175,82,222,0.75) 55%, rgba(52,199,89,0.55) 100%)", boxShadow: "0 14px 26px rgba(0,122,255,0.16)", border: "1px solid rgba(15,23,42,0.08)" },
+  brandMark: {
+    width: 44,
+    height: 44,
+    borderRadius: 16,
+    background:
+      "radial-gradient(circle at 30% 30%, rgba(0,122,255,0.9), rgba(175,82,222,0.75) 55%, rgba(52,199,89,0.55) 100%)",
+    boxShadow: "0 14px 26px rgba(0,122,255,0.16)",
+    border: "1px solid rgba(15,23,42,0.08)",
+  },
   brandTitle: { fontWeight: 950, letterSpacing: 0.3, fontSize: 18 },
   brandSub: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.55)" },
 
-  footer: { marginTop: 16, display: "flex", justifyContent: "center", gap: 10, fontSize: 12, color: "rgba(11,18,32,0.50)" },
+  footer: {
+    marginTop: 16,
+    display: "flex",
+    justifyContent: "center",
+    gap: 10,
+    fontSize: 12,
+    color: "rgba(11,18,32,0.50)",
+  },
 };
