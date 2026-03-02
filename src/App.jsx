@@ -21,7 +21,7 @@ export default function App() {
   const [taskCheckins, setTaskCheckins] = useState([]);
 
   // UI states
-  const [page, setPage] = useState("list"); // "list" | "tree"（你如果暂时不用树，可以保留 list）
+  const [page, setPage] = useState("list"); // "list" | "tree"
   const [editingOId, setEditingOId] = useState(null);
 
   // New O (collapsed)
@@ -34,7 +34,6 @@ export default function App() {
   // Drafts
   const [krDrafts, setKrDrafts] = useState({}); // by O id
   const [taskDrafts, setTaskDrafts] = useState({}); // by KR id
-  const [taskCheckinDrafts, setTaskCheckinDrafts] = useState({}); // by task id
 
   // Modal
   const [checkinModalTask, setCheckinModalTask] = useState(null); // { task, isEditing }
@@ -43,7 +42,7 @@ export default function App() {
   const [menuOpenKey, setMenuOpenKey] = useState(null);
   const menuRootRef = useRef(null);
 
-  // Tasks per-KR collapse + density (缩放/紧凑)
+  // Tasks per-KR collapse
   const [tasksCollapsed, setTasksCollapsed] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("okr_tasks_collapsed") || "{}");
@@ -51,10 +50,11 @@ export default function App() {
       return {};
     }
   });
-  const [tasksDensity, setTasksDensity] = useState(() => {
-    // "normal" | "compact" | "tiny"
+
+  // ✅ O collapse (hide KR list)
+  const [oCollapsed, setOCollapsed] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem("okr_tasks_density") || "{}");
+      return JSON.parse(localStorage.getItem("okr_o_collapsed") || "{}");
     } catch {
       return {};
     }
@@ -65,8 +65,8 @@ export default function App() {
   }, [tasksCollapsed]);
 
   useEffect(() => {
-    localStorage.setItem("okr_tasks_density", JSON.stringify(tasksDensity));
-  }, [tasksDensity]);
+    localStorage.setItem("okr_o_collapsed", JSON.stringify(oCollapsed));
+  }, [oCollapsed]);
 
   // ---------- Tahoe Light background ----------
   useEffect(() => {
@@ -207,10 +207,6 @@ export default function App() {
       return next;
     });
 
-    // task draft by KR
-    const now = new Date();
-    const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-
     setTaskDrafts((prev) => {
       const next = { ...prev };
       for (const kr of krs) {
@@ -221,22 +217,6 @@ export default function App() {
             progress: "0",
             error: "",
             saving: false,
-          };
-        }
-      }
-      return next;
-    });
-
-    setTaskCheckinDrafts((prev) => {
-      const next = { ...prev };
-      for (const t of tks || []) {
-        if (!next[t.id]) {
-          next[t.id] = {
-            month: ym,
-            value: "",
-            note: "",
-            saving: false,
-            error: "",
           };
         }
       }
@@ -498,31 +478,25 @@ export default function App() {
   }
 
   // ---------- Task Check-in ----------
-  function setTaskCheckinDraft(taskId, patch) {
-    setTaskCheckinDrafts((prev) => ({
-      ...prev,
-      [taskId]: { ...(prev[taskId] || {}), ...patch },
-    }));
-  }
+  async function upsertTaskCheckin(taskId, monthYM, valueRaw, noteRaw) {
+    const monthFirstDay = ymToFirstDay(monthYM);
+    const valueNum = safeNumber(valueRaw);
 
-  async function upsertTaskCheckin(task) {
-    const d = taskCheckinDrafts[task.id] || { month: "", value: "", note: "" };
-    const monthFirstDay = ymToFirstDay(d.month);
-    const valueNum = safeNumber(d.value);
-
-    if (!monthFirstDay) return setTaskCheckinDraft(task.id, { error: "请选择月份" });
-    if (!Number.isFinite(valueNum) || valueNum < 0) {
-      return setTaskCheckinDraft(task.id, { error: "复盘值必须是 ≥ 0 的数字" });
+    if (!monthFirstDay) {
+      alert("请选择月份");
+      return false;
     }
-
-    setTaskCheckinDraft(task.id, { saving: true, error: "" });
+    if (!Number.isFinite(valueNum) || valueNum < 0) {
+      alert("复盘值必须是 ≥ 0 的数字");
+      return false;
+    }
 
     const payload = {
       id: crypto.randomUUID(),
-      task_id: task.id,
+      task_id: taskId,
       month: monthFirstDay,
       value: valueNum,
-      note: (d.note || "").trim(),
+      note: (noteRaw || "").trim(),
       created_by: session.user.id,
     };
 
@@ -531,12 +505,12 @@ export default function App() {
       .upsert(payload, { onConflict: "task_id,month" });
 
     if (error) {
-      setTaskCheckinDraft(task.id, { saving: false, error: "记录失败：" + (error.message || "unknown") });
-      return;
+      alert("记录失败：" + (error.message || "unknown"));
+      return false;
     }
 
-    setTaskCheckinDraft(task.id, { value: "", note: "", saving: false, error: "" });
     await loadAll();
+    return true;
   }
 
   async function updateTaskCheckin(id, patch) {
@@ -656,8 +630,25 @@ export default function App() {
     );
   }
 
-  // 复盘弹窗（按 Task）
-  function TaskCheckinPanel({ task, isEditing, history, draft }) {
+  // ✅ 复盘弹窗（按 Task）——修复光标丢失：使用本地 state，不跟着父组件反复重渲染
+  function TaskCheckinPanel({ task, isEditing, history }) {
+    const now = new Date();
+    const defaultYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+    const [monthYM, setMonthYM] = useState(defaultYM);
+    const [value, setValue] = useState("");
+    const [note, setNote] = useState("");
+    const [saving, setSaving] = useState(false);
+
+    // task 切换时重置输入
+    useEffect(() => {
+      setMonthYM(defaultYM);
+      setValue("");
+      setNote("");
+      setSaving(false);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [task?.id]);
+
     return (
       <div>
         {isEditing ? (
@@ -668,8 +659,8 @@ export default function App() {
                 <input
                   style={styles.input}
                   type="month"
-                  value={draft.month || ""}
-                  onChange={(e) => setTaskCheckinDraft(task.id, { month: e.target.value })}
+                  value={monthYM}
+                  onChange={(e) => setMonthYM(e.target.value)}
                 />
               </div>
               <div>
@@ -678,8 +669,8 @@ export default function App() {
                   style={styles.input}
                   type="number"
                   placeholder="例如：5000000"
-                  value={draft.value ?? ""}
-                  onChange={(e) => setTaskCheckinDraft(task.id, { value: e.target.value })}
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
                 />
               </div>
               <div>
@@ -687,16 +678,25 @@ export default function App() {
                 <input
                   style={styles.input}
                   placeholder="例如：本月完成关键节点，风险下降"
-                  value={draft.note ?? ""}
-                  onChange={(e) => setTaskCheckinDraft(task.id, { note: e.target.value })}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
                 />
               </div>
             </div>
 
-            {draft.error ? <div style={styles.toastErr}>{draft.error}</div> : null}
-
-            <Button onClick={() => upsertTaskCheckin(task)} disabled={draft.saving}>
-              {draft.saving ? "记录中..." : "记录本月复盘"}
+            <Button
+              onClick={async () => {
+                setSaving(true);
+                const ok = await upsertTaskCheckin(task.id, monthYM, value, note);
+                setSaving(false);
+                if (ok) {
+                  setValue("");
+                  setNote("");
+                }
+              }}
+              disabled={saving}
+            >
+              {saving ? "记录中..." : "记录本月复盘"}
             </Button>
           </>
         ) : (
@@ -733,14 +733,7 @@ export default function App() {
                         ) : null}
                       </div>
                     ) : (
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 10,
-                          alignItems: "center",
-                          flexWrap: "wrap",
-                        }}
-                      >
+                      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                         <span style={styles.muted}>值：</span>
                         <input
                           style={styles.inlineInput}
@@ -776,6 +769,293 @@ export default function App() {
           ) : (
             <div style={{ marginTop: 10, ...styles.muted }}>暂无复盘记录</div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // ---------- Tree View（只显示 O + KR） ----------
+  function TreeView({ objectives }) {
+    const wrapRef = useRef(null);
+    const contentRef = useRef(null);
+    const [lines, setLines] = useState([]);
+    const nodeRefs = useRef(new Map());
+    const [scale, setScale] = useState(1);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+
+    const root = useMemo(
+      () => ({ id: "root", title: "年度OKR", type: "ROOT", main_owner: "公司", progress: 0 }),
+      []
+    );
+
+    function setRef(key, el) {
+      if (!key) return;
+      if (el) nodeRefs.current.set(key, el);
+      else nodeRefs.current.delete(key);
+    }
+
+    function calcPos(el) {
+      const r = el.getBoundingClientRect();
+      const cr = contentRef.current.getBoundingClientRect();
+      return {
+        x: r.left - cr.left + r.width / 2,
+        top: r.top - cr.top,
+        bottom: r.bottom - cr.top,
+      };
+    }
+
+    function recomputeLines() {
+      if (!contentRef.current) return;
+      const newLines = [];
+
+      for (const o of objectives) {
+        const rootEl = nodeRefs.current.get(`root`);
+        const oEl = nodeRefs.current.get(`o:${o.id}`);
+        if (!rootEl || !oEl) continue;
+
+        const a = calcPos(rootEl);
+        const b = calcPos(oEl);
+        newLines.push({ x1: a.x, y1: a.bottom, x2: b.x, y2: b.top });
+
+        for (const kr of o.krs) {
+          const krEl = nodeRefs.current.get(`kr:${kr.id}`);
+          if (!krEl) continue;
+          const c = calcPos(oEl);
+          const d = calcPos(krEl);
+          newLines.push({ x1: c.x, y1: c.bottom, x2: d.x, y2: d.top });
+        }
+      }
+      setLines(newLines);
+    }
+
+    useLayoutEffect(() => {
+      recomputeLines();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [objectives, scale]);
+
+    useEffect(() => {
+      function onResize() {
+        recomputeLines();
+      }
+      window.addEventListener("resize", onResize);
+      return () => window.removeEventListener("resize", onResize);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [scale]);
+
+    useEffect(() => {
+      const el = wrapRef.current;
+      if (!el) return;
+
+      function onWheel(e) {
+        const isZoomGesture = e.ctrlKey || e.metaKey;
+        if (!isZoomGesture) return;
+        e.preventDefault();
+        setScale((s) => clamp(round2(s + (e.deltaY > 0 ? -0.08 : 0.08)), 0.55, 2.0));
+      }
+
+      el.addEventListener("wheel", onWheel, { passive: false });
+      return () => el.removeEventListener("wheel", onWheel);
+    }, []);
+
+    useEffect(() => {
+      function onFsChange() {
+        const fsEl = document.fullscreenElement;
+        setIsFullscreen(!!fsEl);
+        setTimeout(() => recomputeLines(), 50);
+      }
+      document.addEventListener("fullscreenchange", onFsChange);
+      return () => document.removeEventListener("fullscreenchange", onFsChange);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    function clamp(n, a, b) {
+      return Math.max(a, Math.min(b, n));
+    }
+    function round2(n) {
+      return Math.round(n * 100) / 100;
+    }
+    function zoomIn() {
+      setScale((s) => clamp(round2(s + 0.1), 0.55, 2.0));
+    }
+    function zoomOut() {
+      setScale((s) => clamp(round2(s - 0.1), 0.55, 2.0));
+    }
+    function resetZoom() {
+      setScale(1);
+    }
+
+    function fitZoom() {
+      const wrap = wrapRef.current;
+      const content = contentRef.current;
+      if (!wrap || !content) return;
+
+      setScale(1);
+      requestAnimationFrame(() => {
+        const wr = wrap.getBoundingClientRect();
+        const cr = content.getBoundingClientRect();
+        const padding = 56;
+        const availW = wr.width - padding;
+        const availH = wr.height - padding;
+        const ratioW = availW / cr.width;
+        const ratioH = availH / cr.height;
+        const next = clamp(round2(Math.min(ratioW, ratioH)), 0.55, 2.0);
+        setScale(next);
+        requestAnimationFrame(() => wrap.scrollTo({ top: 0, left: 0, behavior: "smooth" }));
+      });
+    }
+
+    async function toggleFullscreen() {
+      const el = wrapRef.current;
+      if (!el) return;
+      if (!document.fullscreenElement) {
+        try {
+          await el.requestFullscreen();
+        } catch (e) {
+          alert("进入全屏失败（浏览器可能限制）");
+        }
+      } else {
+        await document.exitFullscreen();
+      }
+    }
+
+    const allKrs = objectives.flatMap((o) => o.krs || []);
+    const rootProgress =
+      allKrs.length === 0
+        ? 0
+        : Math.round(allKrs.reduce((acc, k) => acc + clampProgress(k.progress ?? 0), 0) / allKrs.length);
+
+    return (
+      <div style={styles.panel}>
+        <div style={styles.treeTopBar}>
+          <div>
+            <div style={styles.h3}>关系树</div>
+            <div style={styles.muted}>Ctrl/⌘ + 滚轮缩放；只展示 O 与 KR</div>
+          </div>
+
+          <div style={styles.zoomBar}>
+            <Button variant="soft" onClick={zoomOut}>
+              －
+            </Button>
+            <Chip tone="blue">{Math.round(scale * 100)}%</Chip>
+            <Button variant="soft" onClick={zoomIn}>
+              ＋
+            </Button>
+            <Button variant="ghost" onClick={fitZoom}>
+              适配
+            </Button>
+            <Button variant="ghost" onClick={resetZoom}>
+              重置
+            </Button>
+            <Button variant={isFullscreen ? "soft" : "primary"} onClick={toggleFullscreen}>
+              {isFullscreen ? "退出全屏" : "全屏"}
+            </Button>
+          </div>
+        </div>
+
+        <div ref={wrapRef} style={isFullscreen ? styles.treeWrapFullscreen : styles.treeWrap}>
+          <div
+            ref={contentRef}
+            style={{
+              position: "relative",
+              transform: `scale(${scale})`,
+              transformOrigin: "top left",
+              width: "max-content",
+              padding: 22,
+            }}
+          >
+            <svg style={styles.treeSvg}>
+              {lines.map((ln, i) => (
+                <line
+                  key={i}
+                  x1={ln.x1}
+                  y1={ln.y1}
+                  x2={ln.x2}
+                  y2={ln.y2}
+                  stroke="rgba(35, 46, 65, 0.18)"
+                  strokeWidth="2"
+                />
+              ))}
+            </svg>
+
+            {/* Root */}
+            <div style={styles.treeLevel}>
+              <div ref={(el) => setRef("root", el)} style={{ ...styles.nodeCard, ...styles.nodeRoot }}>
+                <div style={styles.nodeTitle}>
+                  <span style={styles.nodeGlyph}>◎</span>
+                  {root.title}
+                </div>
+                <div style={styles.nodeSubSmall}>负责人：{ownerLabel(root)}</div>
+                <div style={styles.nodeMeta}>
+                  <span style={styles.nodeMetaLeft}>类型：公司</span>
+                  <span style={styles.nodeProgress}>{rootProgress}%</span>
+                </div>
+                <ProgressBar value={rootProgress} />
+              </div>
+            </div>
+
+            {/* O Level */}
+            <div style={{ ...styles.treeLevel, marginTop: 20 }}>
+              <div style={styles.treeRow}>
+                {objectives.map((o, idx) => {
+                  const oProgress = clampProgress(o.progress ?? 0);
+
+                  return (
+                    <div
+                      key={o.id}
+                      ref={(el) => setRef(`o:${o.id}`, el)}
+                      style={styles.nodeCard}
+                      title={o.title}
+                    >
+                      <div style={styles.nodeTitle}>
+                        <span style={styles.nodeGlyph}>O</span>
+                        {`O${idx + 1}`}
+                      </div>
+                      <div style={styles.nodeSub}>{o.title}</div>
+                      <div style={styles.nodeSubSmall}>负责人：{ownerLabel(o)}</div>
+                      <div style={styles.nodeMeta}>
+                        <span style={styles.nodeMetaLeft}>公司</span>
+                        <span style={styles.nodeProgress}>{oProgress}%</span>
+                      </div>
+                      <ProgressBar value={oProgress} />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* KR Level */}
+            <div style={{ ...styles.treeLevel, marginTop: 20 }}>
+              <div style={styles.treeRow}>
+                {objectives.map((o) => (
+                  <div key={o.id} style={styles.krCol}>
+                    {(o.krs || []).map((k, kIdx) => {
+                      const p = clampProgress(k.progress ?? 0);
+                      return (
+                        <div
+                          key={k.id}
+                          ref={(el) => setRef(`kr:${k.id}`, el)}
+                          style={{ ...styles.nodeCard }}
+                          title={k.title}
+                        >
+                          <div style={styles.nodeTitle}>
+                            <span style={styles.nodeGlyph}>K</span>
+                            {`KR${kIdx + 1}`}
+                          </div>
+                          <div style={styles.nodeSub}>{k.title}</div>
+                          <div style={styles.nodeSubSmall}>负责人：{ownerLabel(k)}</div>
+                          <div style={styles.nodeMeta}>
+                            <span style={styles.nodeMetaLeft}>KR</span>
+                            <span style={styles.nodeProgress}>{p}%</span>
+                          </div>
+                          <ProgressBar value={p} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -827,7 +1107,7 @@ export default function App() {
           <div style={styles.logoOrb} />
           <div>
             <div style={styles.appTitle}>OKR Nexus</div>
-            <div style={styles.appSub}>O → KR → Task · 复盘按 Task 录入</div>
+            <div style={styles.appSub}>O → KR → Task · 复盘按 Task 录入 · 进度手填</div>
           </div>
         </div>
 
@@ -842,7 +1122,6 @@ export default function App() {
             <button
               style={page === "tree" ? styles.tabActive : styles.tab}
               onClick={() => setPage("tree")}
-              title="如你暂时不用树，也可忽略"
             >
               关系树
             </button>
@@ -854,17 +1133,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* 你若暂时没做 tree，这里就先给一个提示，不影响 list */}
       {page === "tree" ? (
-        <div style={styles.panel}>
-          <div style={styles.h3}>关系树</div>
-          <div style={{ marginTop: 6, ...styles.muted }}>
-            你当前版本如果还没接入 Tree 视图，可以先用「列表」完成 Task 复盘流程。
-          </div>
-        </div>
+        <TreeView objectives={objectives} />
       ) : (
         <>
-          {/* New Objective (Collapsed) */}
+          {/* New Objective */}
           <div style={styles.panel}>
             <div style={styles.panelHeaderRow}>
               <div>
@@ -937,6 +1210,7 @@ export default function App() {
               };
 
             const oProgress = clampProgress(o.progress ?? 0);
+            const isOCollapsed = !!oCollapsed[o.id];
 
             return (
               <div key={o.id} style={styles.panel}>
@@ -959,9 +1233,7 @@ export default function App() {
                     <div style={styles.oMetaRow}>
                       <Chip tone="gray">负责人：{ownerLabel(o)}</Chip>
                       <Chip tone="violet">进度 {oProgress}%</Chip>
-                      {isEditing ? (
-                        <span style={styles.muted}>（编辑后点空白处自动保存）</span>
-                      ) : null}
+                      {isEditing ? <span style={styles.muted}>（编辑后点空白处自动保存）</span> : null}
                     </div>
 
                     {isEditing ? (
@@ -988,7 +1260,16 @@ export default function App() {
                     ) : null}
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    {/* ✅ O 折叠 KR */}
+                    <Button
+                      variant="soft"
+                      onClick={() => setOCollapsed((prev) => ({ ...prev, [o.id]: !prev[o.id] }))}
+                      title="折叠/展开该 Objective 的 KR"
+                    >
+                      {isOCollapsed ? "展开 KR" : "折叠 KR"}
+                    </Button>
+
                     <Button
                       variant={isEditing ? "soft" : "primary"}
                       onClick={() => {
@@ -1013,289 +1294,266 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* KR List */}
-                <div style={{ marginTop: 12 }}>
-                  <div style={styles.sectionTitle}>KR</div>
+                {/* ✅ KR List（可被 O 折叠隐藏） */}
+                {isOCollapsed ? (
+                  <div style={styles.collapsedHint}>
+                    <span style={styles.muted}>该 Objective 的 KR 已折叠。</span>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={styles.sectionTitle}>KR</div>
 
-                  {o.krs.length ? (
-                    <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-                      {o.krs.map((k, kIdx) => {
-                        const krProgress = clampProgress(k.progress ?? 0);
-                        const tone = krProgress >= 80 ? "green" : krProgress >= 40 ? "blue" : "violet";
+                    {o.krs.length ? (
+                      <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                        {o.krs.map((k, kIdx) => {
+                          const krProgress = clampProgress(k.progress ?? 0);
+                          const tone = krProgress >= 80 ? "green" : krProgress >= 40 ? "blue" : "violet";
 
-                        const krTasks = tasksByKr[k.id] || [];
+                          const krTasks = tasksByKr[k.id] || [];
+                          const collapsed = !!tasksCollapsed[k.id];
 
-                        // per-KR UI states
-                        const collapsed = !!tasksCollapsed[k.id];
-                        const density = tasksDensity[k.id] || "compact"; // default compact
+                          return (
+                            <div key={k.id} style={styles.krCard}>
+                              {/* KR header */}
+                              <div style={styles.krHeadRow}>
+                                <div style={styles.krLeft}>
+                                  <span style={styles.krBadge}>{`KR${kIdx + 1}`}</span>
+                                  <div style={{ minWidth: 0 }}>
+                                    {isEditing ? (
+                                      <input
+                                        style={styles.krTitleInput}
+                                        defaultValue={k.title}
+                                        onBlur={(e) => updateTitle(k.id, e.target.value)}
+                                      />
+                                    ) : (
+                                      <div style={styles.krTitleText} title={k.title}>
+                                        {k.title}
+                                      </div>
+                                    )}
+                                    <div style={styles.krSubLine}>
+                                      <span style={styles.krSubLabel}>负责人：</span>
+                                      {isEditing ? (
+                                        <input
+                                          style={styles.krMiniInput}
+                                          defaultValue={k.main_owner || ""}
+                                          placeholder="姓名"
+                                          onBlur={(e) => updateMainOwner(k.id, e.target.value)}
+                                        />
+                                      ) : (
+                                        <span style={styles.krSubValue}>{ownerLabel(k)}</span>
+                                      )}
 
-                        const densityLabel =
-                          density === "normal" ? "正常" : density === "tiny" ? "超紧凑" : "紧凑";
-                        const densityScale = density === "normal" ? 1 : density === "tiny" ? 0.82 : 0.9;
-
-                        return (
-                          <div key={k.id} style={styles.krCard}>
-                            {/* KR header row */}
-                            <div style={styles.krHeadRow}>
-                              <div style={styles.krLeft}>
-                                <span style={styles.krBadge}>{`KR${kIdx + 1}`}</span>
-                                <div style={{ minWidth: 0 }}>
-                                  {isEditing ? (
-                                    <input
-                                      style={styles.krTitleInput}
-                                      defaultValue={k.title}
-                                      onBlur={(e) => updateTitle(k.id, e.target.value)}
-                                    />
-                                  ) : (
-                                    <div style={styles.krTitleText} title={k.title}>
-                                      {k.title}
+                                      <span style={{ ...styles.krSubLabel, marginLeft: 10 }}>进度：</span>
+                                      {isEditing ? (
+                                        <input
+                                          style={{ ...styles.krMiniInput, width: 70 }}
+                                          type="number"
+                                          defaultValue={krProgress}
+                                          onBlur={(e) => updateProgressItem(k.id, e.target.value)}
+                                        />
+                                      ) : (
+                                        <span style={styles.krSubValue}>{krProgress}%</span>
+                                      )}
                                     </div>
-                                  )}
-                                  <div style={styles.krSubLine}>
-                                    <span style={styles.krSubLabel}>负责人：</span>
-                                    {isEditing ? (
-                                      <input
-                                        style={styles.krMiniInput}
-                                        defaultValue={k.main_owner || ""}
-                                        placeholder="姓名"
-                                        onBlur={(e) => updateMainOwner(k.id, e.target.value)}
-                                      />
-                                    ) : (
-                                      <span style={styles.krSubValue}>{ownerLabel(k)}</span>
-                                    )}
-
-                                    <span style={{ ...styles.krSubLabel, marginLeft: 10 }}>进度：</span>
-                                    {isEditing ? (
-                                      <input
-                                        style={{ ...styles.krMiniInput, width: 70 }}
-                                        type="number"
-                                        defaultValue={krProgress}
-                                        onBlur={(e) => updateProgressItem(k.id, e.target.value)}
-                                      />
-                                    ) : (
-                                      <span style={styles.krSubValue}>{krProgress}%</span>
-                                    )}
                                   </div>
+                                </div>
+
+                                <div style={styles.krRight}>
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 190 }}>
+                                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                      <Chip tone={tone}>进度 {krProgress}%</Chip>
+                                    </div>
+                                    <ProgressBar value={krProgress} />
+                                  </div>
+
+                                  {isEditing ? (
+                                    <MoreMenu
+                                      menuKey={`kr:${k.id}`}
+                                      items={[
+                                        {
+                                          label: "删除 KR",
+                                          danger: true,
+                                          onClick: () => deleteItem(k.id, `KR${kIdx + 1}`),
+                                        },
+                                      ]}
+                                    />
+                                  ) : null}
                                 </div>
                               </div>
 
-                              <div style={styles.krRight}>
-                                <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 190 }}>
-                                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                                    <Chip tone={tone}>进度 {krProgress}%</Chip>
-                                  </div>
-                                  <ProgressBar value={krProgress} />
+                              {/* Tasks header（仅保留折叠） */}
+                              <div style={styles.tasksHeaderRow}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                  <div style={styles.tasksTitle}>Tasks</div>
+                                  <Chip tone="gray">{krTasks.length} 个</Chip>
                                 </div>
 
-                                {isEditing ? (
-                                  <MoreMenu
-                                    menuKey={`kr:${k.id}`}
-                                    items={[
-                                      { label: "删除 KR", danger: true, onClick: () => deleteItem(k.id, `KR${kIdx + 1}`) },
-                                    ]}
-                                  />
-                                ) : null}
-                              </div>
-                            </div>
-
-                            {/* Tasks header (NEW: collapse + density) */}
-                            <div style={styles.tasksHeaderRow}>
-                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                <div style={styles.tasksTitle}>Tasks</div>
-                                <Chip tone="gray">{krTasks.length} 个</Chip>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                  <Button
+                                    variant="soft"
+                                    onClick={() => setTasksCollapsed((prev) => ({ ...prev, [k.id]: !prev[k.id] }))}
+                                    title="折叠/展开 Tasks"
+                                    style={{ padding: "8px 10px", borderRadius: 10 }}
+                                  >
+                                    {collapsed ? "展开 Tasks" : "折叠 Tasks"}
+                                  </Button>
+                                </div>
                               </div>
 
-                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                <Button
-                                  variant="ghost"
-                                  onClick={() =>
-                                    setTasksDensity((prev) => {
-                                      const cur = prev[k.id] || "compact";
-                                      const next = cur === "normal" ? "compact" : cur === "compact" ? "tiny" : "normal";
-                                      return { ...prev, [k.id]: next };
-                                    })
-                                  }
-                                  title="切换 Tasks 展示密度（更紧凑=更小）"
-                                  style={{ padding: "8px 10px", borderRadius: 10, fontWeight: 900 }}
-                                >
-                                  密度：{densityLabel}
-                                </Button>
+                              {/* Tasks list */}
+                              {!collapsed ? (
+                                <div style={styles.tasksWrap}>
+                                  {krTasks.length ? (
+                                    <div style={{ display: "grid", gap: 8 }}>
+                                      {krTasks.map((t, tIdx) => {
+                                        const tProgress = clampProgress(t.progress ?? 0);
+                                        return (
+                                          <div key={t.id} style={styles.taskRow}>
+                                            <div style={styles.taskLeft}>
+                                              <span style={styles.taskBadge}>{`T${tIdx + 1}`}</span>
 
-                                <Button
-                                  variant="soft"
-                                  onClick={() =>
-                                    setTasksCollapsed((prev) => ({ ...prev, [k.id]: !prev[k.id] }))
-                                  }
-                                  title="折叠/展开 Tasks"
-                                  style={{ padding: "8px 10px", borderRadius: 10 }}
-                                >
-                                  {collapsed ? "展开 Tasks" : "折叠 Tasks"}
-                                </Button>
-                              </div>
-                            </div>
+                                              <div style={{ minWidth: 0 }}>
+                                                {isEditing ? (
+                                                  <input
+                                                    style={styles.taskTitleInput}
+                                                    defaultValue={t.title}
+                                                    onBlur={(e) => updateTaskTitle(t.id, e.target.value)}
+                                                  />
+                                                ) : (
+                                                  <div style={styles.taskTitleText} title={t.title}>
+                                                    {t.title}
+                                                  </div>
+                                                )}
 
-                            {/* Tasks list (Smaller + collapsible) */}
-                            {!collapsed ? (
-                              <div
-                                style={{
-                                  ...styles.tasksWrap,
-                                  transform: `scale(${densityScale})`,
-                                  transformOrigin: "top left",
-                                }}
-                              >
-                                {krTasks.length ? (
-                                  <div style={{ display: "grid", gap: 8 }}>
-                                    {krTasks.map((t, tIdx) => {
-                                      const tProgress = clampProgress(t.progress ?? 0);
+                                                <div style={styles.taskMetaLine}>
+                                                  <span style={styles.taskMetaLabel}>负责人：</span>
+                                                  {isEditing ? (
+                                                    <input
+                                                      style={styles.taskMiniInput}
+                                                      defaultValue={t.main_owner || ""}
+                                                      placeholder="姓名"
+                                                      onBlur={(e) => updateTaskOwner(t.id, e.target.value)}
+                                                    />
+                                                  ) : (
+                                                    <span style={styles.taskMetaValue}>{ownerLabel(t)}</span>
+                                                  )}
 
-                                      return (
-                                        <div key={t.id} style={styles.taskRow}>
-                                          <div style={styles.taskLeft}>
-                                            <span style={styles.taskBadge}>{`T${tIdx + 1}`}</span>
-
-                                            <div style={{ minWidth: 0 }}>
-                                              {isEditing ? (
-                                                // ✅ 关键：用 defaultValue + onBlur，避免“每输入一个字符就重渲染导致光标丢失”
-                                                <input
-                                                  style={styles.taskTitleInput}
-                                                  defaultValue={t.title}
-                                                  onBlur={(e) => updateTaskTitle(t.id, e.target.value)}
-                                                />
-                                              ) : (
-                                                <div style={styles.taskTitleText} title={t.title}>
-                                                  {t.title}
+                                                  <span style={{ ...styles.taskMetaLabel, marginLeft: 10 }}>进度：</span>
+                                                  {isEditing ? (
+                                                    <input
+                                                      style={{ ...styles.taskMiniInput, width: 70 }}
+                                                      type="number"
+                                                      defaultValue={tProgress}
+                                                      onBlur={(e) => updateTaskProgress(t.id, e.target.value)}
+                                                    />
+                                                  ) : (
+                                                    <span style={styles.taskMetaValue}>{tProgress}%</span>
+                                                  )}
                                                 </div>
-                                              )}
-
-                                              <div style={styles.taskMetaLine}>
-                                                <span style={styles.taskMetaLabel}>负责人：</span>
-                                                {isEditing ? (
-                                                  <input
-                                                    style={styles.taskMiniInput}
-                                                    defaultValue={t.main_owner || ""}
-                                                    placeholder="姓名"
-                                                    onBlur={(e) => updateTaskOwner(t.id, e.target.value)}
-                                                  />
-                                                ) : (
-                                                  <span style={styles.taskMetaValue}>{ownerLabel(t)}</span>
-                                                )}
-
-                                                <span style={{ ...styles.taskMetaLabel, marginLeft: 10 }}>进度：</span>
-                                                {isEditing ? (
-                                                  <input
-                                                    style={{ ...styles.taskMiniInput, width: 70 }}
-                                                    type="number"
-                                                    defaultValue={tProgress}
-                                                    onBlur={(e) => updateTaskProgress(t.id, e.target.value)}
-                                                  />
-                                                ) : (
-                                                  <span style={styles.taskMetaValue}>{tProgress}%</span>
-                                                )}
                                               </div>
                                             </div>
-                                          </div>
 
-                                          <div style={styles.taskRight}>
-                                            <div style={{ minWidth: 160 }}>
-                                              <ProgressBar value={tProgress} />
+                                            <div style={styles.taskRight}>
+                                              <div style={{ minWidth: 160 }}>
+                                                <ProgressBar value={tProgress} />
+                                              </div>
+
+                                              <Button
+                                                variant="ghost"
+                                                onClick={() => {
+                                                  setMenuOpenKey(null);
+                                                  setCheckinModalTask({ task: t, isEditing });
+                                                }}
+                                                style={{ padding: "8px 10px", borderRadius: 10 }}
+                                              >
+                                                复盘
+                                              </Button>
+
+                                              {isEditing ? (
+                                                <MoreMenu
+                                                  menuKey={`task:${t.id}`}
+                                                  items={[
+                                                    {
+                                                      label: "删除 Task",
+                                                      danger: true,
+                                                      onClick: () => deleteTask(t.id, `T${tIdx + 1}`),
+                                                    },
+                                                  ]}
+                                                />
+                                              ) : null}
                                             </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  ) : (
+                                    <div style={{ ...styles.muted, marginTop: 6 }}>暂无 Tasks</div>
+                                  )}
 
-                                            <Button
-                                              variant="ghost"
-                                              onClick={() => {
-                                                setMenuOpenKey(null);
-                                                setCheckinModalTask({ task: t, isEditing });
-                                              }}
-                                              style={{ padding: "8px 10px", borderRadius: 10 }}
-                                            >
-                                              复盘
-                                            </Button>
+                                  {/* Add Task */}
+                                  {isEditing ? (
+                                    <div style={{ marginTop: 10, ...styles.subPanel }}>
+                                      <div style={styles.sectionTitle}>新增 Task</div>
 
-                                            {isEditing ? (
-                                              <MoreMenu
-                                                menuKey={`task:${t.id}`}
-                                                items={[
-                                                  { label: "删除 Task", danger: true, onClick: () => deleteTask(t.id, `T${tIdx + 1}`) },
-                                                ]}
-                                              />
-                                            ) : null}
+                                      <div style={{ marginTop: 10 }}>
+                                        <div style={styles.formRow}>
+                                          <div style={{ flex: 2 }}>
+                                            <div style={styles.label}>Task 描述</div>
+                                            <input
+                                              style={styles.input}
+                                              placeholder="例如：渠道 A 月GMV ≥ 500万"
+                                              value={taskDrafts[k.id]?.title ?? ""}
+                                              onChange={(e) => setTaskDraft(k.id, { title: e.target.value })}
+                                            />
+                                          </div>
+                                          <div style={{ flex: 1 }}>
+                                            <div style={styles.label}>主要负责人</div>
+                                            <input
+                                              style={styles.input}
+                                              placeholder="例如：李四"
+                                              value={taskDrafts[k.id]?.main_owner ?? ""}
+                                              onChange={(e) => setTaskDraft(k.id, { main_owner: e.target.value })}
+                                            />
+                                          </div>
+                                          <div style={{ width: 140 }}>
+                                            <div style={styles.label}>进度（0-100）</div>
+                                            <input
+                                              style={styles.input}
+                                              type="number"
+                                              value={taskDrafts[k.id]?.progress ?? "0"}
+                                              onChange={(e) => setTaskDraft(k.id, { progress: e.target.value })}
+                                            />
                                           </div>
                                         </div>
-                                      );
-                                    })}
-                                  </div>
-                                ) : (
-                                  <div style={{ ...styles.muted, marginTop: 6 }}>暂无 Tasks（建议 KR 下拆关键执行任务）</div>
-                                )}
 
-                                {/* Add Task */}
-                                {isEditing ? (
-                                  <div style={{ marginTop: 10, ...styles.subPanel }}>
-                                    <div style={styles.sectionTitle}>新增 Task</div>
+                                        {taskDrafts[k.id]?.error ? (
+                                          <div style={styles.toastErr}>{taskDrafts[k.id].error}</div>
+                                        ) : null}
 
-                                    <div style={{ marginTop: 10 }}>
-                                      <div style={styles.formRow}>
-                                        <div style={{ flex: 2 }}>
-                                          <div style={styles.label}>Task 描述</div>
-                                          {/* ✅ 用受控输入也可以，但这里用受控会频繁 setState
-                                              仍然不会丢光标（只要 key 稳定），但为了稳，保持受控 + 不换 key */}
-                                          <input
-                                            style={styles.input}
-                                            placeholder="例如：渠道 A 月GMV ≥ 500万"
-                                            value={(taskDrafts[k.id]?.title ?? "")}
-                                            onChange={(e) => setTaskDraft(k.id, { title: e.target.value })}
-                                          />
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                          <div style={styles.label}>主要负责人</div>
-                                          <input
-                                            style={styles.input}
-                                            placeholder="例如：李四"
-                                            value={(taskDrafts[k.id]?.main_owner ?? "")}
-                                            onChange={(e) => setTaskDraft(k.id, { main_owner: e.target.value })}
-                                          />
-                                        </div>
-                                        <div style={{ width: 140 }}>
-                                          <div style={styles.label}>进度（0-100）</div>
-                                          <input
-                                            style={styles.input}
-                                            type="number"
-                                            value={(taskDrafts[k.id]?.progress ?? "0")}
-                                            onChange={(e) => setTaskDraft(k.id, { progress: e.target.value })}
-                                          />
-                                        </div>
+                                        <Button onClick={() => addTask(k.id)} disabled={!!taskDrafts[k.id]?.saving}>
+                                          {taskDrafts[k.id]?.saving ? "新增中..." : "新增 Task"}
+                                        </Button>
                                       </div>
-
-                                      {taskDrafts[k.id]?.error ? (
-                                        <div style={styles.toastErr}>{taskDrafts[k.id].error}</div>
-                                      ) : null}
-
-                                      <Button
-                                        onClick={() => addTask(k.id)}
-                                        disabled={!!taskDrafts[k.id]?.saving}
-                                      >
-                                        {taskDrafts[k.id]?.saving ? "新增中..." : "新增 Task"}
-                                      </Button>
                                     </div>
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : (
-                              <div style={{ ...styles.tasksCollapsedHint }}>
-                                <span style={styles.muted}>已折叠。点击右侧「展开 Tasks」查看。</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div style={{ marginTop: 10, ...styles.muted }}>还没有 KR（建议先拆 2–4 条 KR）</div>
-                  )}
-                </div>
+                                  ) : null}
+                                </div>
+                              ) : (
+                                <div style={styles.tasksCollapsedHint}>
+                                  <span style={styles.muted}>已折叠。点击「展开 Tasks」查看。</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div style={{ marginTop: 10, ...styles.muted }}>还没有 KR</div>
+                    )}
+                  </div>
+                )}
 
                 {/* Add KR */}
-                {isEditing ? (
+                {isEditing && !isOCollapsed ? (
                   <div style={{ marginTop: 14, ...styles.subPanel }}>
                     <div style={styles.sectionTitle}>新增 KR</div>
 
@@ -1338,18 +1596,6 @@ export default function App() {
                     </div>
                   </div>
                 ) : null}
-
-                {/* Delete O in edit mode */}
-                {isEditing ? (
-                  <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
-                    <MoreMenu
-                      menuKey={`o-bottom:${o.id}`}
-                      items={[
-                        { label: "删除 O", danger: true, onClick: () => deleteItem(o.id, `O${idx + 1}`) },
-                      ]}
-                    />
-                  </div>
-                ) : null}
               </div>
             );
           })}
@@ -1371,15 +1617,6 @@ export default function App() {
             task={checkinModalTask.task}
             isEditing={checkinModalTask.isEditing}
             history={taskCheckinsByTask[checkinModalTask.task.id] || []}
-            draft={
-              taskCheckinDrafts[checkinModalTask.task.id] || {
-                month: "",
-                value: "",
-                note: "",
-                saving: false,
-                error: "",
-              }
-            }
           />
         ) : null}
       </Modal>
@@ -1393,7 +1630,7 @@ export default function App() {
   );
 }
 
-/* ----------------------------- Tahoe Light Styles ----------------------------- */
+/* ----------------------------- Styles ----------------------------- */
 const styles = {
   container: {
     maxWidth: 1180,
@@ -1401,7 +1638,6 @@ const styles = {
     padding: "0 16px 36px",
   },
 
-  // Topbar
   topbar: {
     display: "flex",
     justifyContent: "space-between",
@@ -1488,25 +1724,11 @@ const styles = {
     flexWrap: "wrap",
   },
 
-  h3: {
-    fontWeight: 800,
-    fontSize: 15,
-    margin: 0,
-  },
-  sectionTitle: {
-    fontWeight: 800,
-    color: "rgba(11,18,32,0.92)",
-  },
-  muted: {
-    color: "rgba(11,18,32,0.56)",
-    fontSize: 12,
-  },
+  h3: { fontWeight: 800, fontSize: 15, margin: 0 },
+  sectionTitle: { fontWeight: 800, color: "rgba(11,18,32,0.92)" },
+  muted: { color: "rgba(11,18,32,0.56)", fontSize: 12 },
 
-  label: {
-    fontSize: 12,
-    color: "rgba(11,18,32,0.62)",
-    marginBottom: 6,
-  },
+  label: { fontSize: 12, color: "rgba(11,18,32,0.62)", marginBottom: 6 },
   input: {
     width: "100%",
     padding: "10px 12px",
@@ -1590,18 +1812,8 @@ const styles = {
     boxShadow: "0 6px 16px rgba(0,122,255,0.16)",
   },
 
-  oHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    gap: 12,
-  },
-  oTitleRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    minWidth: 0,
-  },
+  oHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 },
+  oTitleRow: { display: "flex", alignItems: "center", gap: 10, minWidth: 0 },
   oIndex: {
     display: "inline-flex",
     alignItems: "center",
@@ -1622,13 +1834,7 @@ const styles = {
     overflow: "hidden",
     textOverflow: "ellipsis",
   },
-  oMetaRow: {
-    marginTop: 10,
-    display: "flex",
-    gap: 10,
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
+  oMetaRow: { marginTop: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" },
   titleInput: {
     width: "min(680px, 70vw)",
     padding: "9px 10px",
@@ -1639,27 +1845,22 @@ const styles = {
     fontWeight: 800,
   },
 
-  // KR card
+  collapsedHint: {
+    marginTop: 12,
+    padding: "10px 12px",
+    borderRadius: 14,
+    background: "rgba(15,23,42,0.02)",
+    border: "1px dashed rgba(15,23,42,0.14)",
+  },
+
   krCard: {
     padding: 12,
     borderRadius: 18,
     border: "1px solid rgba(15,23,42,0.10)",
     background: "rgba(255,255,255,0.70)",
   },
-  krHeadRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    gap: 12,
-    alignItems: "flex-start",
-    flexWrap: "wrap",
-  },
-  krLeft: {
-    display: "flex",
-    gap: 10,
-    alignItems: "flex-start",
-    minWidth: 0,
-    flex: 1.2,
-  },
+  krHeadRow: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" },
+  krLeft: { display: "flex", gap: 10, alignItems: "flex-start", minWidth: 0, flex: 1.2 },
   krBadge: {
     display: "inline-flex",
     alignItems: "center",
@@ -1690,23 +1891,9 @@ const styles = {
     outline: "none",
     fontWeight: 800,
   },
-  krSubLine: {
-    marginTop: 6,
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap",
-  },
-  krSubLabel: {
-    fontSize: 12,
-    color: "rgba(11,18,32,0.55)",
-    fontWeight: 700,
-  },
-  krSubValue: {
-    fontSize: 12,
-    color: "rgba(11,18,32,0.78)",
-    fontWeight: 800,
-  },
+  krSubLine: { marginTop: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  krSubLabel: { fontSize: 12, color: "rgba(11,18,32,0.55)", fontWeight: 700 },
+  krSubValue: { fontSize: 12, color: "rgba(11,18,32,0.78)", fontWeight: 800 },
   krMiniInput: {
     width: 120,
     padding: "6px 8px",
@@ -1717,15 +1904,8 @@ const styles = {
     fontSize: 12,
     fontWeight: 800,
   },
-  krRight: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    justifyContent: "flex-end",
-    flexWrap: "wrap",
-  },
+  krRight: { display: "flex", alignItems: "center", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" },
 
-  // ✅ Tasks header row (NEW)
   tasksHeaderRow: {
     marginTop: 10,
     paddingTop: 10,
@@ -1736,12 +1916,7 @@ const styles = {
     gap: 10,
     flexWrap: "wrap",
   },
-  tasksTitle: {
-    fontWeight: 900,
-    color: "rgba(11,18,32,0.88)",
-  },
-
-  // ✅ Tasks wrap (smaller area)
+  tasksTitle: { fontWeight: 900, color: "rgba(11,18,32,0.88)" },
   tasksWrap: {
     marginTop: 10,
     padding: 10,
@@ -1760,7 +1935,6 @@ const styles = {
     alignItems: "center",
   },
 
-  // ✅ Task row (更小更紧凑)
   taskRow: {
     display: "flex",
     justifyContent: "space-between",
@@ -1770,13 +1944,7 @@ const styles = {
     border: "1px solid rgba(15,23,42,0.10)",
     background: "rgba(255,255,255,0.78)",
   },
-  taskLeft: {
-    display: "flex",
-    gap: 10,
-    alignItems: "flex-start",
-    minWidth: 0,
-    flex: 1.2,
-  },
+  taskLeft: { display: "flex", gap: 10, alignItems: "flex-start", minWidth: 0, flex: 1.2 },
   taskBadge: {
     display: "inline-flex",
     alignItems: "center",
@@ -1809,23 +1977,9 @@ const styles = {
     fontWeight: 850,
     fontSize: 13.5,
   },
-  taskMetaLine: {
-    marginTop: 5,
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap",
-  },
-  taskMetaLabel: {
-    fontSize: 11.5,
-    color: "rgba(11,18,32,0.55)",
-    fontWeight: 750,
-  },
-  taskMetaValue: {
-    fontSize: 11.5,
-    color: "rgba(11,18,32,0.78)",
-    fontWeight: 850,
-  },
+  taskMetaLine: { marginTop: 5, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
+  taskMetaLabel: { fontSize: 11.5, color: "rgba(11,18,32,0.55)", fontWeight: 750 },
+  taskMetaValue: { fontSize: 11.5, color: "rgba(11,18,32,0.78)", fontWeight: 850 },
   taskMiniInput: {
     width: 110,
     padding: "5px 8px",
@@ -1836,28 +1990,11 @@ const styles = {
     fontSize: 11.5,
     fontWeight: 850,
   },
-  taskRight: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    justifyContent: "flex-end",
-    flexWrap: "wrap",
-  },
+  taskRight: { display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" },
 
-  // Layout
-  grid3: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr 2fr",
-    gap: 12,
-  },
-  formRow: {
-    display: "flex",
-    gap: 12,
-    alignItems: "flex-end",
-    flexWrap: "wrap",
-  },
+  grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 2fr", gap: 12 },
+  formRow: { display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" },
 
-  // Menu
   iconBtn: {
     width: 40,
     height: 36,
@@ -1906,7 +2043,6 @@ const styles = {
     fontWeight: 900,
   },
 
-  // Modal
   modalMask: {
     position: "fixed",
     inset: 0,
@@ -1934,10 +2070,7 @@ const styles = {
     padding: "12px 12px 10px 12px",
     borderBottom: "1px solid rgba(15,23,42,0.10)",
   },
-  modalTitle: {
-    fontWeight: 900,
-    color: "#0B1220",
-  },
+  modalTitle: { fontWeight: 900, color: "#0B1220" },
   modalBody: { padding: 12 },
 
   checkinRow: {
@@ -1948,14 +2081,96 @@ const styles = {
     borderBottom: "1px solid rgba(15,23,42,0.08)",
   },
 
-  // Login
-  center: {
-    minHeight: "100vh",
+  // Tree
+  treeTopBar: {
     display: "flex",
     alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 12,
+    flexWrap: "wrap",
   },
+  zoomBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+  treeWrap: {
+    position: "relative",
+    overflow: "auto",
+    borderRadius: 18,
+    background: "rgba(255,255,255,0.65)",
+    border: "1px solid rgba(15,23,42,0.10)",
+    height: "72vh",
+  },
+  treeWrapFullscreen: {
+    position: "relative",
+    overflow: "auto",
+    borderRadius: 0,
+    background: "rgba(255,255,255,0.92)",
+    border: "none",
+    width: "100%",
+    height: "100%",
+  },
+  treeSvg: { position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" },
+  treeLevel: { position: "relative", display: "flex", justifyContent: "center", zIndex: 1 },
+  treeRow: { display: "flex", gap: 24, justifyContent: "center", alignItems: "flex-start", flexWrap: "nowrap" },
+  krCol: { display: "flex", flexDirection: "column", gap: 12, minWidth: 260 },
+
+  nodeCard: {
+    width: 260,
+    borderRadius: 18,
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "rgba(255,255,255,0.80)",
+    padding: 14,
+    boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
+  },
+  nodeRoot: { width: 320 },
+  nodeTitle: {
+    fontWeight: 900,
+    fontSize: 15,
+    marginBottom: 8,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  nodeGlyph: {
+    display: "inline-flex",
+    width: 26,
+    height: 26,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    background: "rgba(0,122,255,0.10)",
+    border: "1px solid rgba(0,122,255,0.16)",
+    fontWeight: 900,
+  },
+  nodeSub: {
+    color: "rgba(11,18,32,0.86)",
+    fontSize: 13,
+    marginBottom: 10,
+    lineHeight: 1.35,
+    maxHeight: 44,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  nodeSubSmall: { color: "rgba(11,18,32,0.58)", fontSize: 12 },
+  nodeMeta: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    borderTop: "1px solid rgba(15,23,42,0.08)",
+    paddingTop: 10,
+    marginBottom: 10,
+  },
+  nodeMetaLeft: { color: "rgba(11,18,32,0.58)", fontSize: 12, fontWeight: 700 },
+  nodeProgress: { fontWeight: 900, color: "rgba(11,18,32,0.85)" },
+
+  // Login
+  center: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 },
   loginCard: {
     width: "min(560px, 92vw)",
     borderRadius: 22,
