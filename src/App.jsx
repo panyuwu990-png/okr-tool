@@ -6,12 +6,19 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-export default function App() {
-  const [session, setSession] = useState(null);
-  const [email, setEmail] = useState("");
-  const [authSending, setAuthSending] = useState(false);
-  const [password, setPassword] = useState("");
+// 你公司内部域名后缀（手机号会拼成 13800138000@cia.com）
+const COMPANY_EMAIL_DOMAIN = "cia.com";
 
+export default function App() {
+  // ---------------- Auth ----------------
+  const [session, setSession] = useState(null);
+
+  // 手机号+密码登录
+  const [phone, setPhone] = useState("");
+  const [password, setPassword] = useState("");
+  const [authSending, setAuthSending] = useState(false);
+
+  // ---------------- Data ----------------
   const [loading, setLoading] = useState(false);
 
   // OKR items (O + KR)
@@ -21,7 +28,7 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [taskCheckins, setTaskCheckins] = useState([]);
 
-  // UI states
+  // ---------------- UI states ----------------
   const [page, setPage] = useState("list"); // "list" | "tree"
   const [editingOId, setEditingOId] = useState(null);
 
@@ -52,7 +59,7 @@ export default function App() {
     }
   });
 
-  // ✅ O collapse (hide KR list)
+  // O collapse (hide KR list)
   const [oCollapsed, setOCollapsed] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("okr_o_collapsed") || "{}");
@@ -138,11 +145,22 @@ export default function App() {
     return a || b || c || "未设置";
   }
 
+  function normalizePhone(raw) {
+    return String(raw || "").replace(/\s+/g, "").replace(/[^\d+]/g, "");
+  }
+
+  function phoneToEmail(p) {
+    const x = normalizePhone(p);
+    if (!x) return "";
+    // 你也可以按你公司规则改：例如 +86 去掉等
+    return `${x}@${COMPANY_EMAIL_DOMAIN}`;
+  }
+
   // ---------- Auth ----------
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => setSession(session)
+      (_event, session2) => setSession(session2)
     );
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -180,6 +198,7 @@ export default function App() {
       alert("加载 okr_tasks 失败：" + (tksErr.message || "unknown error"));
       setTasks([]);
     } else setTasks(tks || []);
+
     if (tcsErr) {
       alert("加载 okr_task_checkins 失败：" + (tcsErr.message || "unknown error"));
       setTaskCheckins([]);
@@ -255,29 +274,29 @@ export default function App() {
   }, [taskCheckins]);
 
   // ---------- Auth Actions ----------
-  const PHONE_EMAIL_SUFFIX = "okr.local";
+  async function signInWithPhonePassword() {
+    const p = normalizePhone(phone);
+    if (!p) return alert("请输入手机号");
+    if (!password) return alert("请输入密码");
 
-function normalizePhone(raw) {
-  return String(raw || "").replace(/\s+/g, "").replace(/[^\d]/g, "");
-}
-function phoneToEmail(phone) {
-  return `${phone}@${PHONE_EMAIL_SUFFIX}`;
-}
+    const emailAlias = phoneToEmail(p);
+    if (!emailAlias) return alert("手机号格式不正确");
 
-async function signIn() {
-  const phone = normalizePhone(email); // 复用 email 输入框当“手机号”
-  if (!phone) return alert("请输入手机号");
-  if (!password) return alert("请输入密码");
+    setAuthSending(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: emailAlias,
+      password,
+    });
+    setAuthSending(false);
 
-  setAuthSending(true);
-  const { error } = await supabase.auth.signInWithPassword({
-    email: phoneToEmail(phone),
-    password,
-  });
-  setAuthSending(false);
+    if (error) {
+      alert("登录失败：" + (error.message || "unknown error"));
+      return;
+    }
 
-  if (error) return alert("登录失败：" + (error.message || "unknown error"));
-}
+    // 清理输入
+    setPassword("");
+  }
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -646,7 +665,7 @@ async function signIn() {
     );
   }
 
-  // ✅ 复盘弹窗（按 Task）——修复光标丢失：使用本地 state，不跟着父组件反复重渲染
+  // ✅ Task 复盘弹窗：本地 state，避免“打字光标消失”
   function TaskCheckinPanel({ task, isEditing, history }) {
     const now = new Date();
     const defaultYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -655,13 +674,14 @@ async function signIn() {
     const [value, setValue] = useState("");
     const [note, setNote] = useState("");
     const [saving, setSaving] = useState(false);
+    const [err, setErr] = useState("");
 
-    // task 切换时重置输入
     useEffect(() => {
       setMonthYM(defaultYM);
       setValue("");
       setNote("");
       setSaving(false);
+      setErr("");
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [task?.id]);
 
@@ -700,14 +720,19 @@ async function signIn() {
               </div>
             </div>
 
+            {err ? <div style={styles.toastErr}>{err}</div> : null}
+
             <Button
               onClick={async () => {
+                setErr("");
                 setSaving(true);
                 const ok = await upsertTaskCheckin(task.id, monthYM, value, note);
                 setSaving(false);
                 if (ok) {
                   setValue("");
                   setNote("");
+                } else {
+                  setErr("记录失败，请检查输入与权限。");
                 }
               }}
               disabled={saving}
@@ -791,7 +816,7 @@ async function signIn() {
   }
 
   // ---------- Tree View（只显示 O + KR） ----------
-  function TreeView({ objectives }) {
+  function TreeView({ objectives: objs }) {
     const wrapRef = useRef(null);
     const contentRef = useRef(null);
     const [lines, setLines] = useState([]);
@@ -824,7 +849,7 @@ async function signIn() {
       if (!contentRef.current) return;
       const newLines = [];
 
-      for (const o of objectives) {
+      for (const o of objs) {
         const rootEl = nodeRefs.current.get(`root`);
         const oEl = nodeRefs.current.get(`o:${o.id}`);
         if (!rootEl || !oEl) continue;
@@ -847,7 +872,7 @@ async function signIn() {
     useLayoutEffect(() => {
       recomputeLines();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [objectives, scale]);
+    }, [objs, scale]);
 
     useEffect(() => {
       function onResize() {
@@ -926,7 +951,7 @@ async function signIn() {
       if (!document.fullscreenElement) {
         try {
           await el.requestFullscreen();
-        } catch (e) {
+        } catch {
           alert("进入全屏失败（浏览器可能限制）");
         }
       } else {
@@ -934,7 +959,7 @@ async function signIn() {
       }
     }
 
-    const allKrs = objectives.flatMap((o) => o.krs || []);
+    const allKrs = objs.flatMap((o) => o.krs || []);
     const rootProgress =
       allKrs.length === 0
         ? 0
@@ -1012,7 +1037,7 @@ async function signIn() {
             {/* O Level */}
             <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
-                {objectives.map((o, idx) => {
+                {objs.map((o, idx) => {
                   const oProgress = clampProgress(o.progress ?? 0);
 
                   return (
@@ -1042,7 +1067,7 @@ async function signIn() {
             {/* KR Level */}
             <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
-                {objectives.map((o) => (
+                {objs.map((o) => (
                   <div key={o.id} style={styles.krCol}>
                     {(o.krs || []).map((k, kIdx) => {
                       const p = clampProgress(k.progress ?? 0);
@@ -1078,37 +1103,65 @@ async function signIn() {
   }
 
   // ---------- Auth Page ----------
-  <div style={{ marginTop: 14 }}>
-  <div style={styles.h3}>登录</div>
-  <div style={styles.muted}>手机号 + 密码</div>
-</div>
+  if (!session) {
+    return (
+      <div style={styles.center}>
+        <div style={styles.loginCard}>
+          <div style={styles.brandRow}>
+            <div style={styles.brandMark} />
+            <div>
+              <div style={styles.brandTitle}>OKR Nexus</div>
+              <div style={styles.brandSub}>手机号 + 密码登录</div>
+            </div>
+          </div>
 
-<input
-  style={styles.input}
-  placeholder="输入手机号（如：13800138000）+cia.com"
-  value={email}
-  onChange={(e) => setEmail(e.target.value)}
-  inputMode="numeric"
-/>
+          <div style={{ marginTop: 14 }}>
+            <div style={styles.h3}>登录</div>
+            <div style={styles.muted}>
+              输入手机号与密码（系统内部会以 <b>手机号@{COMPANY_EMAIL_DOMAIN}</b> 作为登录邮箱）
+            </div>
+          </div>
 
-<input
-  style={styles.input}
-  placeholder="输入密码"
-  type="password"
-  value={password}
-  onChange={(e) => setPassword(e.target.value)}
-  onKeyDown={(e) => {
-    if (e.key === "Enter") signIn();
-  }}
-/>
+          <div style={{ marginTop: 12 }}>
+            <div style={styles.label}>手机号</div>
+            <input
+              style={styles.input}
+              placeholder="例如：13800138000"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoComplete="username"
+            />
+          </div>
 
-<Button onClick={signIn} disabled={authSending}>
-  {authSending ? "登录中..." : "登录"}
-</Button>
+          <div style={{ marginTop: 12 }}>
+            <div style={styles.label}>密码</div>
+            <input
+              style={styles.input}
+              type="password"
+              placeholder="输入密码"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") signInWithPhonePassword();
+              }}
+            />
+          </div>
 
-<div style={{ marginTop: 12, ...styles.muted }}>
-  账号规则：手机号@{PHONE_EMAIL_SUFFIX}（由管理员预录入）
-</div>
+          <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
+            <Button onClick={signInWithPhonePassword} disabled={authSending}>
+              {authSending ? "登录中..." : "登录"}
+            </Button>
+            <Chip tone="gray">无需邮箱收信</Chip>
+          </div>
+
+          <div style={{ marginTop: 12, ...styles.muted }}>
+            若登录失败：确认 Supabase 里已创建对应用户（邮箱=手机号@{COMPANY_EMAIL_DOMAIN}）并设置了密码。
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ---------- Main ----------
   return (
@@ -1125,16 +1178,10 @@ async function signIn() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={styles.tabs}>
-            <button
-              style={page === "list" ? styles.tabActive : styles.tab}
-              onClick={() => setPage("list")}
-            >
+            <button style={page === "list" ? styles.tabActive : styles.tab} onClick={() => setPage("list")}>
               列表
             </button>
-            <button
-              style={page === "tree" ? styles.tabActive : styles.tab}
-              onClick={() => setPage("tree")}
-            >
+            <button style={page === "tree" ? styles.tabActive : styles.tab} onClick={() => setPage("tree")}>
               关系树
             </button>
           </div>
@@ -1159,10 +1206,7 @@ async function signIn() {
 
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {loading ? <Chip tone="violet">同步中</Chip> : <Chip tone="gray">在线</Chip>}
-                <Button
-                  variant={showNewO ? "soft" : "primary"}
-                  onClick={() => setShowNewO((v) => !v)}
-                >
+                <Button variant={showNewO ? "soft" : "primary"} onClick={() => setShowNewO((v) => !v)}>
                   {showNewO ? "收起" : "＋ 新建 Objective"}
                 </Button>
               </div>
@@ -1273,7 +1317,7 @@ async function signIn() {
                   </div>
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    {/* ✅ O 折叠 KR */}
+                    {/* O 折叠 KR */}
                     <Button
                       variant="soft"
                       onClick={() => setOCollapsed((prev) => ({ ...prev, [o.id]: !prev[o.id] }))}
@@ -1306,7 +1350,7 @@ async function signIn() {
                   </div>
                 </div>
 
-                {/* ✅ KR List（可被 O 折叠隐藏） */}
+                {/* KR List（可被 O 折叠隐藏） */}
                 {isOCollapsed ? (
                   <div style={styles.collapsedHint}>
                     <span style={styles.muted}>该 Objective 的 KR 已折叠。</span>
@@ -1342,6 +1386,7 @@ async function signIn() {
                                         {k.title}
                                       </div>
                                     )}
+
                                     <div style={styles.krSubLine}>
                                       <span style={styles.krSubLabel}>负责人：</span>
                                       {isEditing ? (
@@ -1393,7 +1438,7 @@ async function signIn() {
                                 </div>
                               </div>
 
-                              {/* Tasks header（仅保留折叠） */}
+                              {/* Tasks header（只保留折叠） */}
                               <div style={styles.tasksHeaderRow}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                   <div style={styles.tasksTitle}>Tasks</div>
@@ -1644,11 +1689,7 @@ async function signIn() {
 
 /* ----------------------------- Styles ----------------------------- */
 const styles = {
-  container: {
-    maxWidth: 1180,
-    margin: "22px auto",
-    padding: "0 16px 36px",
-  },
+  container: { maxWidth: 1180, margin: "22px auto", padding: "0 16px 36px" },
 
   topbar: {
     display: "flex",
@@ -1674,17 +1715,8 @@ const styles = {
     boxShadow: "0 10px 20px rgba(0,122,255,0.15)",
     border: "1px solid rgba(15,23,42,0.08)",
   },
-  appTitle: {
-    fontWeight: 800,
-    letterSpacing: 0.2,
-    fontSize: 16,
-    color: "#0B1220",
-  },
-  appSub: {
-    marginTop: 2,
-    fontSize: 12,
-    color: "rgba(11,18,32,0.55)",
-  },
+  appTitle: { fontWeight: 800, letterSpacing: 0.2, fontSize: 16, color: "#0B1220" },
+  appSub: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.55)" },
 
   tabs: {
     display: "flex",
@@ -1795,9 +1827,21 @@ const styles = {
     background: "rgba(255,255,255,0.75)",
   },
   chipGray: { color: "rgba(11,18,32,0.78)" },
-  chipBlue: { color: "#0A66FF", background: "rgba(0,122,255,0.10)", border: "1px solid rgba(0,122,255,0.18)" },
-  chipGreen: { color: "#0E7A2A", background: "rgba(52,199,89,0.10)", border: "1px solid rgba(52,199,89,0.18)" },
-  chipViolet: { color: "#6E3BC6", background: "rgba(175,82,222,0.10)", border: "1px solid rgba(175,82,222,0.18)" },
+  chipBlue: {
+    color: "#0A66FF",
+    background: "rgba(0,122,255,0.10)",
+    border: "1px solid rgba(0,122,255,0.18)",
+  },
+  chipGreen: {
+    color: "#0E7A2A",
+    background: "rgba(52,199,89,0.10)",
+    border: "1px solid rgba(52,199,89,0.18)",
+  },
+  chipViolet: {
+    color: "#6E3BC6",
+    background: "rgba(175,82,222,0.10)",
+    border: "1px solid rgba(175,82,222,0.18)",
+  },
 
   toastErr: {
     marginTop: 10,
@@ -1810,12 +1854,7 @@ const styles = {
     fontWeight: 800,
   },
 
-  progressTrack: {
-    height: 6,
-    borderRadius: 999,
-    background: "rgba(15,23,42,0.08)",
-    overflow: "hidden",
-  },
+  progressTrack: { height: 6, borderRadius: 999, background: "rgba(15,23,42,0.08)", overflow: "hidden" },
   progressFill: {
     height: "100%",
     borderRadius: 999,
@@ -2102,13 +2141,7 @@ const styles = {
     marginBottom: 12,
     flexWrap: "wrap",
   },
-  zoomBar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    flexWrap: "wrap",
-    justifyContent: "flex-end",
-  },
+  zoomBar: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" },
   treeWrap: {
     position: "relative",
     overflow: "auto",
@@ -2140,14 +2173,7 @@ const styles = {
     boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
   },
   nodeRoot: { width: 320 },
-  nodeTitle: {
-    fontWeight: 900,
-    fontSize: 15,
-    marginBottom: 8,
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  },
+  nodeTitle: { fontWeight: 900, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 },
   nodeGlyph: {
     display: "inline-flex",
     width: 26,
@@ -2205,12 +2231,5 @@ const styles = {
   brandTitle: { fontWeight: 950, letterSpacing: 0.3, fontSize: 18 },
   brandSub: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.55)" },
 
-  footer: {
-    marginTop: 16,
-    display: "flex",
-    justifyContent: "center",
-    gap: 10,
-    fontSize: 12,
-    color: "rgba(11,18,32,0.50)",
-  },
+  footer: { marginTop: 16, display: "flex", justifyContent: "center", gap: 10, fontSize: 12, color: "rgba(11,18,32,0.50)" },
 };
