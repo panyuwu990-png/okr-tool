@@ -10,6 +10,7 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [email, setEmail] = useState("");
   const [authSending, setAuthSending] = useState(false);
+  const [password, setPassword] = useState("");
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState([]);
@@ -210,14 +211,33 @@ export default function App() {
   }
 
   // ---------- Auth Actions ----------
-  async function signIn() {
-    if (!email.trim()) return alert("请输入邮箱");
-    setAuthSending(true);
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
-    setAuthSending(false);
-    if (error) return alert("发送登录链接失败：" + (error.message || "unknown error"));
-    alert("登录链接已发送到邮箱（若没收到请看垃圾箱）");
-  }
+  // 手机号映射为伪邮箱后缀（要和你在 Supabase Users 里录入的账号一致）
+const PHONE_EMAIL_SUFFIX = "okr.local";
+
+function normalizePhone(raw) {
+  return String(raw || "")
+    .replace(/\s+/g, "")
+    .replace(/[^\d]/g, "");
+}
+
+function phoneToEmail(phone) {
+  return `${phone}@${PHONE_EMAIL_SUFFIX}`;
+}
+
+async function signIn() {
+  const phone = normalizePhone(email); // 复用你原来的 email state，当作“手机号输入框”
+  if (!phone) return alert("请输入手机号");
+  if (!password) return alert("请输入密码");
+
+  setAuthSending(true);
+  const { error } = await supabase.auth.signInWithPassword({
+    email: phoneToEmail(phone),
+    password,
+  });
+  setAuthSending(false);
+
+  if (error) return alert("登录失败：" + (error.message || "unknown error"));
+}
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -955,42 +975,56 @@ export default function App() {
   }
 
   // ---------- Auth Page ----------
-  if (!session) {
-    return (
-      <div style={styles.center}>
-        <div style={styles.loginCard}>
-          <div style={styles.brandRow}>
-            <div style={styles.brandMark} />
-            <div>
-              <div style={styles.brandTitle}>OKR Nexus</div>
-              <div style={styles.brandSub}>轻量 · 专注 · Tahoe 风格</div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 14 }}>
-            <div style={styles.h3}>登录</div>
-            <div style={styles.muted}>邮箱登录（Magic Link）</div>
-          </div>
-
-          <input
-            style={styles.input}
-            placeholder="输入邮箱"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-          />
-
-          <Button onClick={signIn} disabled={authSending}>
-            {authSending ? "发送中..." : "发送登录链接"}
-          </Button>
-
-          <div style={{ marginTop: 12, ...styles.muted }}>
-            * 若没收到邮件，请检查垃圾箱或稍后重试
+  // ---------- Auth Page ----------
+if (!session) {
+  return (
+    <div style={styles.center}>
+      <div style={styles.loginCard}>
+        <div style={styles.brandRow}>
+          <div style={styles.brandMark} />
+          <div>
+            <div style={styles.brandTitle}>OKR Nexus</div>
+            <div style={styles.brandSub}>轻量 · 专注 · Tahoe 风格</div>
           </div>
         </div>
-      </div>
-    );
-  }
 
+        <div style={{ marginTop: 14 }}>
+          <div style={styles.h3}>登录</div>
+          <div style={styles.muted}>手机号 + 密码</div>
+        </div>
+
+        {/* 手机号：复用 email state */}
+        <input
+          style={styles.input}
+          placeholder="输入手机号+尾缀（例如：13800138000 + cia.com）"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          inputMode="numeric"
+        />
+
+        {/* 密码 */}
+        <input
+          style={styles.input}
+          placeholder="输入密码"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") signIn();
+          }}
+        />
+
+        <Button onClick={signIn} disabled={authSending}>
+          {authSending ? "登录中..." : "登录"}
+        </Button>
+
+        <div style={{ marginTop: 12, ...styles.muted }}>
+          账号规则：手机号@{PHONE_EMAIL_SUFFIX}（由管理员预录入）
+        </div>
+      </div>
+    </div>
+  );
+}
   // ---------- Main ----------
   return (
     <div style={styles.container} ref={menuRootRef}>
