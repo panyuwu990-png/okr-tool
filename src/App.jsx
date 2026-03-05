@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useLayoutEffect } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 const supabase = createClient(
@@ -6,14 +6,22 @@ const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY
 );
 
-// 你公司内部域名后缀（手机号会拼成 13800138000@cia.com）
-const COMPANY_EMAIL_DOMAIN = "cia.com";
+/**
+ * ✅ 手机号密码登录策略（方案二）
+ * - 用户输入：phone + password
+ * - 程序内部转成 email：`${phone}@cia.com`
+ * - 使用 Supabase Auth Email/Password 登录（signInWithPassword）
+ *
+ * 前置要求：
+ * 1) Supabase Auth 里 Email provider 已开启（你之前截图里已开启）
+ * 2) Supabase 里创建用户：email=手机号@cia.com，password=你设置的密码
+ */
 
 export default function App() {
   // ---------------- Auth ----------------
   const [session, setSession] = useState(null);
 
-  // 手机号+密码登录
+  // login form
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [authSending, setAuthSending] = useState(false);
@@ -59,7 +67,7 @@ export default function App() {
     }
   });
 
-  // O collapse (hide KR list)
+  // ✅ O collapse (hide KR list)
   const [oCollapsed, setOCollapsed] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem("okr_o_collapsed") || "{}");
@@ -145,22 +153,19 @@ export default function App() {
     return a || b || c || "未设置";
   }
 
-  function normalizePhone(raw) {
-    return String(raw || "").replace(/\s+/g, "").replace(/[^\d+]/g, "");
-  }
-
-  function phoneToEmail(p) {
-    const x = normalizePhone(p);
-    if (!x) return "";
-    // 你也可以按你公司规则改：例如 +86 去掉等
-    return `${x}@${COMPANY_EMAIL_DOMAIN}`;
+  function phoneToEmail(rawPhone) {
+    const p = String(rawPhone || "").trim();
+    // 只保留数字
+    const digits = p.replace(/\D/g, "");
+    if (!digits) return "";
+    return `${digits}@cia.com`;
   }
 
   // ---------- Auth ----------
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session2) => setSession(session2)
+      (_event, session) => setSession(session)
     );
     return () => listener.subscription.unsubscribe();
   }, []);
@@ -181,10 +186,7 @@ export default function App() {
     ] = await Promise.all([
       supabase.from("okr_items").select("*").order("created_at", { ascending: true }),
       supabase.from("okr_tasks").select("*").order("created_at", { ascending: true }),
-      supabase
-        .from("okr_task_checkins")
-        .select("*")
-        .order("created_at", { ascending: true }),
+      supabase.from("okr_task_checkins").select("*").order("created_at", { ascending: true }),
     ]);
 
     setLoading(false);
@@ -275,16 +277,13 @@ export default function App() {
 
   // ---------- Auth Actions ----------
   async function signInWithPhonePassword() {
-    const p = normalizePhone(phone);
-    if (!p) return alert("请输入手机号");
+    const email = phoneToEmail(phone);
+    if (!email) return alert("请输入正确的手机号（仅数字）");
     if (!password) return alert("请输入密码");
-
-    const emailAlias = phoneToEmail(p);
-    if (!emailAlias) return alert("手机号格式不正确");
 
     setAuthSending(true);
     const { error } = await supabase.auth.signInWithPassword({
-      email: emailAlias,
+      email,
       password,
     });
     setAuthSending(false);
@@ -293,9 +292,6 @@ export default function App() {
       alert("登录失败：" + (error.message || "unknown error"));
       return;
     }
-
-    // 清理输入
-    setPassword("");
   }
 
   async function signOut() {
@@ -665,7 +661,11 @@ export default function App() {
     );
   }
 
-  // ✅ Task 复盘弹窗：本地 state，避免“打字光标消失”
+  /**
+   * ✅ 复盘弹窗（按 Task）
+   * - 修复光标丢失：月复盘输入使用 Panel 内部 local state
+   * - 不再跟随父组件频繁 setState 而重渲染导致 input 重挂载
+   */
   function TaskCheckinPanel({ task, isEditing, history }) {
     const now = new Date();
     const defaultYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -674,14 +674,13 @@ export default function App() {
     const [value, setValue] = useState("");
     const [note, setNote] = useState("");
     const [saving, setSaving] = useState(false);
-    const [err, setErr] = useState("");
 
+    // task 切换时重置输入
     useEffect(() => {
       setMonthYM(defaultYM);
       setValue("");
       setNote("");
       setSaving(false);
-      setErr("");
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [task?.id]);
 
@@ -720,19 +719,14 @@ export default function App() {
               </div>
             </div>
 
-            {err ? <div style={styles.toastErr}>{err}</div> : null}
-
             <Button
               onClick={async () => {
-                setErr("");
                 setSaving(true);
                 const ok = await upsertTaskCheckin(task.id, monthYM, value, note);
                 setSaving(false);
                 if (ok) {
                   setValue("");
                   setNote("");
-                } else {
-                  setErr("记录失败，请检查输入与权限。");
                 }
               }}
               disabled={saving}
@@ -800,7 +794,9 @@ export default function App() {
 
                         <MoreMenu
                           menuKey={`tck:${h.id}`}
-                          items={[{ label: "删除复盘", danger: true, onClick: () => deleteTaskCheckin(h.id) }]}
+                          items={[
+                            { label: "删除复盘", danger: true, onClick: () => deleteTaskCheckin(h.id) },
+                          ]}
                         />
                       </div>
                     )}
@@ -816,7 +812,7 @@ export default function App() {
   }
 
   // ---------- Tree View（只显示 O + KR） ----------
-  function TreeView({ objectives: objs }) {
+  function TreeView({ objectives }) {
     const wrapRef = useRef(null);
     const contentRef = useRef(null);
     const [lines, setLines] = useState([]);
@@ -849,7 +845,7 @@ export default function App() {
       if (!contentRef.current) return;
       const newLines = [];
 
-      for (const o of objs) {
+      for (const o of objectives) {
         const rootEl = nodeRefs.current.get(`root`);
         const oEl = nodeRefs.current.get(`o:${o.id}`);
         if (!rootEl || !oEl) continue;
@@ -872,7 +868,7 @@ export default function App() {
     useLayoutEffect(() => {
       recomputeLines();
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [objs, scale]);
+    }, [objectives, scale]);
 
     useEffect(() => {
       function onResize() {
@@ -959,7 +955,7 @@ export default function App() {
       }
     }
 
-    const allKrs = objs.flatMap((o) => o.krs || []);
+    const allKrs = objectives.flatMap((o) => o.krs || []);
     const rootProgress =
       allKrs.length === 0
         ? 0
@@ -1037,9 +1033,8 @@ export default function App() {
             {/* O Level */}
             <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
-                {objs.map((o, idx) => {
+                {objectives.map((o, idx) => {
                   const oProgress = clampProgress(o.progress ?? 0);
-
                   return (
                     <div
                       key={o.id}
@@ -1067,7 +1062,7 @@ export default function App() {
             {/* KR Level */}
             <div style={{ ...styles.treeLevel, marginTop: 20 }}>
               <div style={styles.treeRow}>
-                {objs.map((o) => (
+                {objectives.map((o) => (
                   <div key={o.id} style={styles.krCol}>
                     {(o.krs || []).map((k, kIdx) => {
                       const p = clampProgress(k.progress ?? 0);
@@ -1104,6 +1099,8 @@ export default function App() {
 
   // ---------- Auth Page ----------
   if (!session) {
+    const emailPreview = phoneToEmail(phone);
+
     return (
       <div style={styles.center}>
         <div style={styles.loginCard}>
@@ -1111,14 +1108,14 @@ export default function App() {
             <div style={styles.brandMark} />
             <div>
               <div style={styles.brandTitle}>OKR Nexus</div>
-              <div style={styles.brandSub}>手机号 + 密码登录</div>
+              <div style={styles.brandSub}>手机号 + 密码（内部用 Email/Password）</div>
             </div>
           </div>
 
           <div style={{ marginTop: 14 }}>
             <div style={styles.h3}>登录</div>
             <div style={styles.muted}>
-              输入手机号与密码（系统内部会以 <b>手机号@{COMPANY_EMAIL_DOMAIN}</b> 作为登录邮箱）
+              输入手机号与密码（手机号会自动拼成 <b>手机号@cia.com</b> 登录）
             </div>
           </div>
 
@@ -1129,34 +1126,37 @@ export default function App() {
               placeholder="例如：13800138000"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              autoComplete="username"
+              inputMode="numeric"
             />
+            {emailPreview ? (
+              <div style={{ marginTop: 8, ...styles.muted }}>
+                将使用账号：<b>{emailPreview}</b>
+              </div>
+            ) : null}
           </div>
 
           <div style={{ marginTop: 12 }}>
             <div style={styles.label}>密码</div>
             <input
               style={styles.input}
-              type="password"
               placeholder="输入密码"
+              type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
               onKeyDown={(e) => {
                 if (e.key === "Enter") signInWithPhonePassword();
               }}
             />
           </div>
 
-          <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
+          <div style={{ marginTop: 12 }}>
             <Button onClick={signInWithPhonePassword} disabled={authSending}>
               {authSending ? "登录中..." : "登录"}
             </Button>
-            <Chip tone="gray">无需邮箱收信</Chip>
           </div>
 
           <div style={{ marginTop: 12, ...styles.muted }}>
-            若登录失败：确认 Supabase 里已创建对应用户（邮箱=手机号@{COMPANY_EMAIL_DOMAIN}）并设置了密码。
+            * 若提示 “Invalid login credentials”，请确认 Supabase 里已创建该用户（手机号@cia.com）并设置了密码
           </div>
         </div>
       </div>
@@ -1178,10 +1178,16 @@ export default function App() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <div style={styles.tabs}>
-            <button style={page === "list" ? styles.tabActive : styles.tab} onClick={() => setPage("list")}>
+            <button
+              style={page === "list" ? styles.tabActive : styles.tab}
+              onClick={() => setPage("list")}
+            >
               列表
             </button>
-            <button style={page === "tree" ? styles.tabActive : styles.tab} onClick={() => setPage("tree")}>
+            <button
+              style={page === "tree" ? styles.tabActive : styles.tab}
+              onClick={() => setPage("tree")}
+            >
               关系树
             </button>
           </div>
@@ -1206,7 +1212,10 @@ export default function App() {
 
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 {loading ? <Chip tone="violet">同步中</Chip> : <Chip tone="gray">在线</Chip>}
-                <Button variant={showNewO ? "soft" : "primary"} onClick={() => setShowNewO((v) => !v)}>
+                <Button
+                  variant={showNewO ? "soft" : "primary"}
+                  onClick={() => setShowNewO((v) => !v)}
+                >
                   {showNewO ? "收起" : "＋ 新建 Objective"}
                 </Button>
               </div>
@@ -1317,7 +1326,7 @@ export default function App() {
                   </div>
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                    {/* O 折叠 KR */}
+                    {/* ✅ O 折叠 KR */}
                     <Button
                       variant="soft"
                       onClick={() => setOCollapsed((prev) => ({ ...prev, [o.id]: !prev[o.id] }))}
@@ -1343,14 +1352,18 @@ export default function App() {
                       <MoreMenu
                         menuKey={`o:${o.id}`}
                         items={[
-                          { label: "删除 O", danger: true, onClick: () => deleteItem(o.id, `O${idx + 1}`) },
+                          {
+                            label: "删除 O",
+                            danger: true,
+                            onClick: () => deleteItem(o.id, `O${idx + 1}`),
+                          },
                         ]}
                       />
                     ) : null}
                   </div>
                 </div>
 
-                {/* KR List（可被 O 折叠隐藏） */}
+                {/* ✅ KR List（可被 O 折叠隐藏） */}
                 {isOCollapsed ? (
                   <div style={styles.collapsedHint}>
                     <span style={styles.muted}>该 Objective 的 KR 已折叠。</span>
@@ -1363,7 +1376,8 @@ export default function App() {
                       <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
                         {o.krs.map((k, kIdx) => {
                           const krProgress = clampProgress(k.progress ?? 0);
-                          const tone = krProgress >= 80 ? "green" : krProgress >= 40 ? "blue" : "violet";
+                          const tone =
+                            krProgress >= 80 ? "green" : krProgress >= 40 ? "blue" : "violet";
 
                           const krTasks = tasksByKr[k.id] || [];
                           const collapsed = !!tasksCollapsed[k.id];
@@ -1386,7 +1400,6 @@ export default function App() {
                                         {k.title}
                                       </div>
                                     )}
-
                                     <div style={styles.krSubLine}>
                                       <span style={styles.krSubLabel}>负责人：</span>
                                       {isEditing ? (
@@ -1400,7 +1413,9 @@ export default function App() {
                                         <span style={styles.krSubValue}>{ownerLabel(k)}</span>
                                       )}
 
-                                      <span style={{ ...styles.krSubLabel, marginLeft: 10 }}>进度：</span>
+                                      <span style={{ ...styles.krSubLabel, marginLeft: 10 }}>
+                                        进度：
+                                      </span>
                                       {isEditing ? (
                                         <input
                                           style={{ ...styles.krMiniInput, width: 70 }}
@@ -1438,7 +1453,7 @@ export default function App() {
                                 </div>
                               </div>
 
-                              {/* Tasks header（只保留折叠） */}
+                              {/* Tasks header（仅保留折叠） */}
                               <div style={styles.tasksHeaderRow}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                                   <div style={styles.tasksTitle}>Tasks</div>
@@ -1448,7 +1463,9 @@ export default function App() {
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                   <Button
                                     variant="soft"
-                                    onClick={() => setTasksCollapsed((prev) => ({ ...prev, [k.id]: !prev[k.id] }))}
+                                    onClick={() =>
+                                      setTasksCollapsed((prev) => ({ ...prev, [k.id]: !prev[k.id] }))
+                                    }
                                     title="折叠/展开 Tasks"
                                     style={{ padding: "8px 10px", borderRadius: 10 }}
                                   >
@@ -1495,7 +1512,9 @@ export default function App() {
                                                     <span style={styles.taskMetaValue}>{ownerLabel(t)}</span>
                                                   )}
 
-                                                  <span style={{ ...styles.taskMetaLabel, marginLeft: 10 }}>进度：</span>
+                                                  <span style={{ ...styles.taskMetaLabel, marginLeft: 10 }}>
+                                                    进度：
+                                                  </span>
                                                   {isEditing ? (
                                                     <input
                                                       style={{ ...styles.taskMiniInput, width: 70 }}
@@ -1560,7 +1579,9 @@ export default function App() {
                                               style={styles.input}
                                               placeholder="例如：渠道 A 月GMV ≥ 500万"
                                               value={taskDrafts[k.id]?.title ?? ""}
-                                              onChange={(e) => setTaskDraft(k.id, { title: e.target.value })}
+                                              onChange={(e) =>
+                                                setTaskDraft(k.id, { title: e.target.value })
+                                              }
                                             />
                                           </div>
                                           <div style={{ flex: 1 }}>
@@ -1569,7 +1590,9 @@ export default function App() {
                                               style={styles.input}
                                               placeholder="例如：李四"
                                               value={taskDrafts[k.id]?.main_owner ?? ""}
-                                              onChange={(e) => setTaskDraft(k.id, { main_owner: e.target.value })}
+                                              onChange={(e) =>
+                                                setTaskDraft(k.id, { main_owner: e.target.value })
+                                              }
                                             />
                                           </div>
                                           <div style={{ width: 140 }}>
@@ -1578,7 +1601,9 @@ export default function App() {
                                               style={styles.input}
                                               type="number"
                                               value={taskDrafts[k.id]?.progress ?? "0"}
-                                              onChange={(e) => setTaskDraft(k.id, { progress: e.target.value })}
+                                              onChange={(e) =>
+                                                setTaskDraft(k.id, { progress: e.target.value })
+                                              }
                                             />
                                           </div>
                                         </div>
@@ -1587,7 +1612,10 @@ export default function App() {
                                           <div style={styles.toastErr}>{taskDrafts[k.id].error}</div>
                                         ) : null}
 
-                                        <Button onClick={() => addTask(k.id)} disabled={!!taskDrafts[k.id]?.saving}>
+                                        <Button
+                                          onClick={() => addTask(k.id)}
+                                          disabled={!!taskDrafts[k.id]?.saving}
+                                        >
                                           {taskDrafts[k.id]?.saving ? "新增中..." : "新增 Task"}
                                         </Button>
                                       </div>
@@ -1664,7 +1692,9 @@ export default function App() {
         open={!!checkinModalTask}
         title={
           checkinModalTask
-            ? `月度复盘｜${checkinModalTask.task.title}（负责人：${ownerLabel(checkinModalTask.task)}）`
+            ? `月度复盘｜${checkinModalTask.task.title}（负责人：${ownerLabel(
+                checkinModalTask.task
+              )}）`
             : ""
         }
         onClose={() => setCheckinModalTask(null)}
@@ -1689,7 +1719,11 @@ export default function App() {
 
 /* ----------------------------- Styles ----------------------------- */
 const styles = {
-  container: { maxWidth: 1180, margin: "22px auto", padding: "0 16px 36px" },
+  container: {
+    maxWidth: 1180,
+    margin: "22px auto",
+    padding: "0 16px 36px",
+  },
 
   topbar: {
     display: "flex",
@@ -1715,8 +1749,17 @@ const styles = {
     boxShadow: "0 10px 20px rgba(0,122,255,0.15)",
     border: "1px solid rgba(15,23,42,0.08)",
   },
-  appTitle: { fontWeight: 800, letterSpacing: 0.2, fontSize: 16, color: "#0B1220" },
-  appSub: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.55)" },
+  appTitle: {
+    fontWeight: 800,
+    letterSpacing: 0.2,
+    fontSize: 16,
+    color: "#0B1220",
+  },
+  appSub: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "rgba(11,18,32,0.55)",
+  },
 
   tabs: {
     display: "flex",
@@ -1854,7 +1897,12 @@ const styles = {
     fontWeight: 800,
   },
 
-  progressTrack: { height: 6, borderRadius: 999, background: "rgba(15,23,42,0.08)", overflow: "hidden" },
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    background: "rgba(15,23,42,0.08)",
+    overflow: "hidden",
+  },
   progressFill: {
     height: "100%",
     borderRadius: 999,
@@ -1910,7 +1958,13 @@ const styles = {
     border: "1px solid rgba(15,23,42,0.10)",
     background: "rgba(255,255,255,0.70)",
   },
-  krHeadRow: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" },
+  krHeadRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "flex-start",
+    flexWrap: "wrap",
+  },
   krLeft: { display: "flex", gap: 10, alignItems: "flex-start", minWidth: 0, flex: 1.2 },
   krBadge: {
     display: "inline-flex",
@@ -2141,7 +2195,13 @@ const styles = {
     marginBottom: 12,
     flexWrap: "wrap",
   },
-  zoomBar: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" },
+  zoomBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
   treeWrap: {
     position: "relative",
     overflow: "auto",
@@ -2173,7 +2233,14 @@ const styles = {
     boxShadow: "0 10px 26px rgba(15,23,42,0.06)",
   },
   nodeRoot: { width: 320 },
-  nodeTitle: { fontWeight: 900, fontSize: 15, marginBottom: 8, display: "flex", alignItems: "center", gap: 8 },
+  nodeTitle: {
+    fontWeight: 900,
+    fontSize: 15,
+    marginBottom: 8,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
   nodeGlyph: {
     display: "inline-flex",
     width: 26,
@@ -2231,5 +2298,12 @@ const styles = {
   brandTitle: { fontWeight: 950, letterSpacing: 0.3, fontSize: 18 },
   brandSub: { marginTop: 2, fontSize: 12, color: "rgba(11,18,32,0.55)" },
 
-  footer: { marginTop: 16, display: "flex", justifyContent: "center", gap: 10, fontSize: 12, color: "rgba(11,18,32,0.50)" },
+  footer: {
+    marginTop: 16,
+    display: "flex",
+    justifyContent: "center",
+    gap: 10,
+    fontSize: 12,
+    color: "rgba(11,18,32,0.50)",
+  },
 };
